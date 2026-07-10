@@ -1,0 +1,514 @@
+/* =========================================================================
+ * DCS Assessment Command Center — Event Workspace view
+ * Event profile, readiness meter, participants, systems, mission threads,
+ * protected data objects, domain weights, and the daily execution log.
+ * ========================================================================= */
+
+"use strict";
+
+const ViewEvent = (() => {
+  const { el, field, input, textarea, select } = UI;
+
+  let activeTab = "profile";
+
+  const TABS = [
+    { id: "profile",  label: "Event Profile" },
+    { id: "threads",  label: "Mission Threads" },
+    { id: "assets",   label: "Protected Data Objects" },
+    { id: "people",   label: "Participants & Systems" },
+    { id: "weights",  label: "Compliance Weights" },
+    { id: "daily",    label: "Daily Log / Hotwash" }
+  ];
+
+  function render(container, params = {}) {
+    if (params.tab) activeTab = params.tab;
+    const ev = Store.activeEvent();
+    container.innerHTML = "";
+
+    const tabs = el("div", { class: "tab-bar" }, TABS.map((t) =>
+      el("button", {
+        class: `tab${t.id === activeTab ? " active" : ""}`,
+        onclick: () => { activeTab = t.id; App.go("event"); }
+      }, t.label)));
+
+    const body = el("div", { class: "tab-body" });
+    if (activeTab === "profile") body.appendChild(profileTab(ev));
+    if (activeTab === "threads") body.appendChild(threadsTab(ev, params));
+    if (activeTab === "assets")  body.appendChild(assetsTab(ev));
+    if (activeTab === "people")  body.appendChild(peopleTab(ev));
+    if (activeTab === "weights") body.appendChild(weightsTab(ev));
+    if (activeTab === "daily")   body.appendChild(dailyTab(ev));
+
+    container.appendChild(el("div", { class: "view" },
+      el("div", { class: "view-head" },
+        el("div", {},
+          el("h1", {}, "Event Workspace"),
+          el("p", { class: "view-sub" }, "Define scope, mission threads, protected assets, and participants before execution — the Readiness Meter tracks planning completeness.")),
+        el("div", { class: "view-actions" },
+          el("button", { class: "btn", onclick: () => Store.exportEventJSON(ev) }, "Export Event JSON"))),
+      readinessMeter(ev), tabs, body));
+
+    if (params.open && activeTab === "threads") {
+      const mt = ev.missionThreads.find((m) => m.id === params.open);
+      if (mt) openThread(ev, mt);
+    }
+  }
+
+  /* -------------------------------------------------- event readiness meter */
+  function readinessMeter(ev) {
+    const checks = [
+      { label: "Event profile complete", ok: !!(ev.name && ev.location && ev.eventWindow && ev.classification) },
+      { label: "Objectives defined", ok: ev.objectives.length > 0 },
+      { label: "Mission threads defined", ok: ev.missionThreads.length > 0 },
+      { label: "Protected data objects registered", ok: ev.assets.length > 0 },
+      { label: "Systems in scope listed", ok: ev.systems.length > 0 },
+      { label: "Assessors assigned", ok: ev.participants.length > 0 },
+      { label: "Checklist items assigned", ok: ev.checklist.some((c) => c.assignee) },
+      { label: "Test cards created", ok: ev.testCards.length > 0 }
+    ];
+    const done = checks.filter((c) => c.ok).length;
+    return el("div", { class: "card readiness-meter" },
+      el("div", { class: "rm-head" },
+        el("h3", { class: "card-title" }, "Event Readiness Meter"),
+        el("span", { class: `badge tone-${done === checks.length ? "good" : done >= 5 ? "warning" : "serious"}` },
+          `${done} of ${checks.length} planning inputs complete`)),
+      el("div", { class: "rm-grid" }, checks.map((c) =>
+        el("span", { class: `rm-item ${c.ok ? "ok" : ""}` },
+          el("span", { class: "rm-mark", "aria-hidden": "true" }, c.ok ? "✓" : "○"), c.label))));
+  }
+
+  /* ------------------------------------------------------------ profile tab */
+  function profileTab(ev) {
+    const nameI = input({ value: ev.name });
+    const locI = input({ value: ev.location, placeholder: "e.g., Honolulu, HI" });
+    const winI = input({ value: ev.eventWindow, placeholder: "e.g., October 2026 (on-site execution)" });
+    const perI = input({ value: ev.assessmentPeriod, placeholder: "e.g., July – December 2026" });
+    const clsS = select(DCS_TEMPLATE.CLASSIFICATIONS, ev.classification);
+    const orgI = textarea({ value: ev.organizations.join("\n"), rows: 4, placeholder: "One organization per line" });
+    const objI = textarea({ value: ev.objectives.join("\n"), rows: 5, placeholder: "One assessment objective per line" });
+    const descI = textarea({ value: ev.description, rows: 3 });
+    const stdWrap = UI.checkList(
+      DCS_TEMPLATE.STANDARDS_OPTIONS.map((s) => ({ value: s, label: s })), ev.standards, "std");
+
+    const saveBtn = el("button", {
+      class: "btn btn-primary", onclick: () => {
+        ev.name = nameI.value.trim() || ev.name;
+        ev.location = locI.value.trim();
+        ev.eventWindow = winI.value.trim();
+        ev.assessmentPeriod = perI.value.trim();
+        ev.classification = clsS.value;
+        ev.description = descI.value.trim();
+        ev.organizations = orgI.value.split("\n").map((s) => s.trim()).filter(Boolean);
+        ev.objectives = objI.value.split("\n").map((s) => s.trim()).filter(Boolean);
+        ev.standards = UI.checkedValues(stdWrap, "std");
+        Store.save();
+        UI.toast("Event profile saved.");
+      }
+    }, "Save Profile");
+
+    return el("div", { class: "card form-card" },
+      el("div", { class: "form-grid" },
+        field("Event Name", nameI),
+        field("Location", locI),
+        field("Event Window", winI),
+        field("Assessment Period", perI),
+        field("Classification Level", clsS, "Governs handling of everything captured in this event."),
+        field("Description", descI)),
+      el("div", { class: "form-grid" },
+        field("Participating Organizations", orgI),
+        field("Assessment Objectives", objI)),
+      field("Standards Alignment", stdWrap),
+      el("div", { class: "form-foot" }, saveBtn));
+  }
+
+  /* ------------------------------------------------------ mission threads */
+  function threadsTab(ev, params) {
+    const wrap = el("div", {});
+    wrap.appendChild(el("div", { class: "list-toolbar" },
+      el("p", { class: "card-hint" },
+        "Mission threads tie every checklist item and test card to an operational outcome — this is what keeps the assessment from becoming a generic cyber checklist."),
+      el("button", { class: "btn btn-primary", onclick: () => editThread(ev, null) }, "+ Add Mission Thread")));
+
+    if (!ev.missionThreads.length) {
+      wrap.appendChild(UI.empty("No mission threads yet", "Example: “Coalition operational data sharing — partner sees authorized information only.”"));
+      return wrap;
+    }
+
+    const table = el("table", { class: "data-table" },
+      el("thead", {}, el("tr", {},
+        ["Mission Thread", "Operational User", "Partner User", "DCS Action", "Tests", "Status", ""].map((h) => el("th", {}, h)))),
+      el("tbody", {}, ev.missionThreads.map((mt) => {
+        const tests = ev.testCards.filter((t) => t.missionThreadId === mt.id);
+        const run = tests.filter((t) => t.result);
+        const failed = run.filter((t) => t.result === "fail").length;
+        return el("tr", { class: "clickable", onclick: () => openThread(ev, mt) },
+          el("td", {}, el("strong", {}, mt.name)),
+          el("td", {}, mt.operationalUser || "—"),
+          el("td", {}, mt.partnerUser || "—"),
+          el("td", {}, mt.dcsAction || "—"),
+          el("td", {}, UI.badge(`${run.length}/${tests.length}`, failed ? "critical" : run.length ? "good" : "muted")),
+          el("td", {}, UI.workflowBadge(mt.status || "not_started")),
+          el("td", { onclick: (e) => e.stopPropagation() },
+            el("button", { class: "icon-btn", title: "Edit", onclick: () => editThread(ev, mt) }, "✎"),
+            el("button", { class: "icon-btn danger", title: "Delete", onclick: () =>
+              UI.confirm("Delete mission thread", `Delete “${mt.name}”? Links from checklist items and test cards will be removed.`, () => {
+                ev.missionThreads = ev.missionThreads.filter((m) => m.id !== mt.id);
+                ev.checklist.forEach((c) => { c.missionThreadIds = c.missionThreadIds.filter((x) => x !== mt.id); });
+                ev.testCards.forEach((t) => { if (t.missionThreadId === mt.id) t.missionThreadId = ""; });
+                Store.save(); App.go("event");
+              }) }, "🗑")));
+      })));
+    wrap.appendChild(el("div", { class: "card table-card" }, table));
+    return wrap;
+  }
+
+  function openThread(ev, mt) {
+    const tests = ev.testCards.filter((t) => t.missionThreadId === mt.id);
+    const items = ev.checklist.filter((c) => c.missionThreadIds.includes(mt.id));
+    const findings = ev.findings.filter((f) => f.missionThreadId === mt.id);
+    UI.drawer(mt.name, "Mission Thread", el("div", {},
+      el("dl", { class: "detail-list" },
+        el("dt", {}, "Operational User"), el("dd", {}, mt.operationalUser || "—"),
+        el("dt", {}, "Partner User"), el("dd", {}, mt.partnerUser || "—"),
+        el("dt", {}, "Protected Assets"), el("dd", {},
+          mt.assetIds.map((id) => (ev.assets.find((a) => a.id === id) || {}).name).filter(Boolean).join(", ") || "—"),
+        el("dt", {}, "DCS Action"), el("dd", {}, mt.dcsAction || "—"),
+        el("dt", {}, "Expected Outcome"), el("dd", {}, mt.expectedOutcome || "—"),
+        el("dt", {}, "Notes"), el("dd", {}, mt.notes || "—")),
+      el("h4", { class: "drawer-h" }, `Linked Test Cards (${tests.length})`),
+      tests.length ? el("ul", { class: "mini-list" }, tests.map((t) =>
+        el("li", { class: "mini-row clickable", onclick: () => { UI.closeDrawer(); App.go("testcards", { open: t.id }); } },
+          UI.resultBadge(t.result), el("span", { class: "mini-title" }, t.title)))) : el("p", { class: "empty-mini" }, "None yet."),
+      el("h4", { class: "drawer-h" }, `Linked Checklist Items (${items.length})`),
+      items.length ? el("ul", { class: "mini-list" }, items.map((c) =>
+        el("li", { class: "mini-row clickable", onclick: () => { UI.closeDrawer(); App.go("checklist", { open: c.id }); } },
+          UI.scorePill(c.score), el("span", { class: "mini-id" }, c.id),
+          el("span", { class: "mini-title" }, Store.templateItem(c.id).requirement)))) : el("p", { class: "empty-mini" }, "None yet."),
+      el("h4", { class: "drawer-h" }, `Findings (${findings.length})`),
+      findings.length ? el("ul", { class: "mini-list" }, findings.map((f) =>
+        el("li", { class: "mini-row clickable", onclick: () => { UI.closeDrawer(); App.go("findings", { open: f.id }); } },
+          UI.severityBadge(f.severity), el("span", { class: "mini-title" }, f.title)))) : el("p", { class: "empty-mini" }, "None yet."),
+      el("div", { class: "drawer-actions" },
+        el("button", { class: "btn", onclick: () => { UI.closeDrawer(); editThread(ev, mt); } }, "Edit Thread"))));
+  }
+
+  function editThread(ev, mt) {
+    const isNew = !mt;
+    const data = mt || { id: Store.uid("MT"), name: "", operationalUser: "", partnerUser: "",
+      assetIds: [], dcsAction: "", expectedOutcome: "", notes: "", status: "not_started" };
+    const nameI = input({ value: data.name, placeholder: "e.g., Coalition operational data sharing" });
+    const ouI = input({ value: data.operationalUser, placeholder: "e.g., U.S. watch officer" });
+    const puI = input({ value: data.partnerUser, placeholder: "e.g., Coalition mission partner" });
+    const actI = input({ value: data.dcsAction, placeholder: "e.g., Allow releasable subset, deny restricted fields" });
+    const outI = input({ value: data.expectedOutcome, placeholder: "e.g., Partner sees authorized information only" });
+    const stS = select(DCS_TEMPLATE.WORKFLOW_STATES.map((w) => ({ value: w.id, label: w.label })), data.status);
+    const notesI = textarea({ value: data.notes });
+    const assetPick = UI.checkList(ev.assets.map((a) => ({ value: a.id, label: a.name })), data.assetIds, "mt-assets");
+
+    UI.modal(isNew ? "Add Mission Thread" : "Edit Mission Thread", el("div", { class: "form-grid" },
+      field("Mission Thread Name", nameI),
+      field("Operational User", ouI),
+      field("Partner User", puI),
+      field("DCS Action", actI),
+      field("Expected Outcome", outI),
+      field("Status", stS),
+      field("Protected Assets", assetPick),
+      field("Notes", notesI)), [
+      { label: "Cancel", onclick: () => {} },
+      { label: isNew ? "Add Thread" : "Save", primary: true, onclick: () => {
+          if (!nameI.value.trim()) { UI.toast("Name is required.", "error"); return false; }
+          Object.assign(data, {
+            name: nameI.value.trim(), operationalUser: ouI.value.trim(), partnerUser: puI.value.trim(),
+            dcsAction: actI.value.trim(), expectedOutcome: outI.value.trim(), status: stS.value,
+            notes: notesI.value.trim(), assetIds: UI.checkedValues(assetPick.parentNode, "mt-assets")
+          });
+          if (isNew) ev.missionThreads.push(data);
+          Store.save(); App.go("event");
+        } }]);
+  }
+
+  /* --------------------------------------------------- protected assets */
+  function assetsTab(ev) {
+    const wrap = el("div", {});
+    wrap.appendChild(el("div", { class: "list-toolbar" },
+      el("p", { class: "card-hint" }, "The protected data object register: what is being protected, who owns it, how it is labeled, and what protections it requires."),
+      el("button", { class: "btn btn-primary", onclick: () => editAsset(ev, null) }, "+ Register Data Object")));
+
+    if (!ev.assets.length) {
+      wrap.appendChild(UI.empty("No protected data objects registered", "Register datasets, APIs, files, feeds, messages, or data products protected by DCS controls."));
+      return wrap;
+    }
+
+    const table = el("table", { class: "data-table" },
+      el("thead", {}, el("tr", {},
+        ["Asset", "Type", "Owner / Steward", "Classification", "Releasability", "Risk", ""].map((h) => el("th", {}, h)))),
+      el("tbody", {}, ev.assets.map((a) =>
+        el("tr", { class: "clickable", onclick: () => openAsset(ev, a) },
+          el("td", {}, el("strong", {}, a.name)),
+          el("td", {}, a.type || "—"),
+          el("td", {}, `${a.owner || "—"} / ${a.steward || "—"}`),
+          el("td", {}, UI.badge(a.classification || "—", "info")),
+          el("td", {}, a.releasability || "—"),
+          el("td", {}, UI.badge(a.riskRating || "—", { High: "critical", Moderate: "warning", Low: "good" }[a.riskRating] || "muted")),
+          el("td", { onclick: (e) => e.stopPropagation() },
+            el("button", { class: "icon-btn", title: "Edit", onclick: () => editAsset(ev, a) }, "✎"),
+            el("button", { class: "icon-btn danger", title: "Delete", onclick: () =>
+              UI.confirm("Delete data object", `Delete “${a.name}”?`, () => {
+                ev.assets = ev.assets.filter((x) => x.id !== a.id);
+                ev.missionThreads.forEach((mt) => { mt.assetIds = mt.assetIds.filter((x) => x !== a.id); });
+                ev.testCards.forEach((t) => { if (t.assetId === a.id) t.assetId = ""; });
+                Store.save(); App.go("event");
+              }) }, "🗑"))))));
+    wrap.appendChild(el("div", { class: "card table-card" }, table));
+    return wrap;
+  }
+
+  function openAsset(ev, a) {
+    const threads = ev.missionThreads.filter((mt) => mt.assetIds.includes(a.id));
+    UI.drawer(a.name, "Protected Data Object", el("div", {},
+      el("dl", { class: "detail-list" },
+        el("dt", {}, "Type"), el("dd", {}, a.type || "—"),
+        el("dt", {}, "Owner"), el("dd", {}, a.owner || "—"),
+        el("dt", {}, "Steward"), el("dd", {}, a.steward || "—"),
+        el("dt", {}, "Source System"), el("dd", {}, a.sourceSystem || "—"),
+        el("dt", {}, "Classification"), el("dd", {}, a.classification || "—"),
+        el("dt", {}, "Releasability"), el("dd", {}, a.releasability || "—"),
+        el("dt", {}, "Handling Caveats"), el("dd", {}, a.caveats || "—"),
+        el("dt", {}, "Mission Tags"), el("dd", {}, a.missionTags || "—"),
+        el("dt", {}, "Required Protections"), el("dd", {}, (a.protections || []).join(", ") || "—"),
+        el("dt", {}, "Risk Rating"), el("dd", {}, a.riskRating || "—"),
+        el("dt", {}, "Notes"), el("dd", {}, a.notes || "—")),
+      el("h4", { class: "drawer-h" }, `Mission Threads Using This Asset (${threads.length})`),
+      threads.length ? el("ul", { class: "mini-list" }, threads.map((mt) =>
+        el("li", { class: "mini-row clickable", onclick: () => openThread(ev, mt) },
+          el("span", { class: "mini-title" }, mt.name)))) : el("p", { class: "empty-mini" }, "Not linked to a mission thread yet."),
+      el("div", { class: "drawer-actions" },
+        el("button", { class: "btn", onclick: () => { UI.closeDrawer(); editAsset(ev, a); } }, "Edit"))));
+  }
+
+  function editAsset(ev, a) {
+    const isNew = !a;
+    const data = a || { id: Store.uid("AST"), name: "", type: "", owner: "", steward: "", sourceSystem: "",
+      classification: "UNCLASSIFIED", releasability: "", caveats: "", missionTags: "", protections: [], riskRating: "Moderate", notes: "" };
+    const nameI = input({ value: data.name });
+    const typeI = input({ value: data.type, placeholder: "Dataset, API, file, feed, message, data product…" });
+    const ownI = input({ value: data.owner });
+    const stwI = input({ value: data.steward });
+    const srcI = input({ value: data.sourceSystem });
+    const clsS = select(DCS_TEMPLATE.CLASSIFICATIONS, data.classification);
+    const relI = input({ value: data.releasability, placeholder: "e.g., REL TO USA, Coalition Partners (subset)" });
+    const cavI = input({ value: data.caveats });
+    const tagI = input({ value: data.missionTags });
+    const protI = textarea({ value: (data.protections || []).join("\n"), rows: 3, placeholder: "One protection per line (encryption, redaction, DLP…)" });
+    const riskS = select(["High", "Moderate", "Low"], data.riskRating);
+    const notesI = textarea({ value: data.notes });
+
+    UI.modal(isNew ? "Register Protected Data Object" : "Edit Protected Data Object",
+      el("div", { class: "form-grid" },
+        field("Name", nameI), field("Type", typeI),
+        field("Owner", ownI), field("Data Steward", stwI),
+        field("Source System", srcI), field("Classification", clsS),
+        field("Releasability", relI), field("Handling Caveats", cavI),
+        field("Mission Tags", tagI), field("Risk Rating", riskS),
+        field("Required Protections", protI), field("Notes", notesI)), [
+      { label: "Cancel", onclick: () => {} },
+      { label: isNew ? "Register" : "Save", primary: true, onclick: () => {
+          if (!nameI.value.trim()) { UI.toast("Name is required.", "error"); return false; }
+          Object.assign(data, {
+            name: nameI.value.trim(), type: typeI.value.trim(), owner: ownI.value.trim(),
+            steward: stwI.value.trim(), sourceSystem: srcI.value.trim(), classification: clsS.value,
+            releasability: relI.value.trim(), caveats: cavI.value.trim(), missionTags: tagI.value.trim(),
+            protections: protI.value.split("\n").map((s) => s.trim()).filter(Boolean),
+            riskRating: riskS.value, notes: notesI.value.trim()
+          });
+          if (isNew) ev.assets.push(data);
+          Store.save(); App.go("event");
+        } }]);
+  }
+
+  /* ------------------------------------------- participants & systems */
+  function peopleTab(ev) {
+    const wrap = el("div", { class: "two-col" });
+
+    const pCard = el("div", { class: "card" },
+      el("div", { class: "list-toolbar" },
+        el("h3", { class: "card-title" }, "Participants & Assessors"),
+        el("button", { class: "btn", onclick: () => editPerson(ev, null) }, "+ Add")),
+      ev.participants.length
+        ? el("table", { class: "data-table" },
+            el("thead", {}, el("tr", {}, ["Name", "Organization", "Role", ""].map((h) => el("th", {}, h)))),
+            el("tbody", {}, ev.participants.map((p) =>
+              el("tr", {},
+                el("td", {}, p.name), el("td", {}, p.org || "—"),
+                el("td", {}, UI.badge(p.role, "info")),
+                el("td", {},
+                  el("button", { class: "icon-btn", title: "Edit", onclick: () => editPerson(ev, p) }, "✎"),
+                  el("button", { class: "icon-btn danger", title: "Remove", onclick: () =>
+                    UI.confirm("Remove participant", `Remove ${p.name}?`, () => {
+                      ev.participants = ev.participants.filter((x) => x.id !== p.id);
+                      Store.save(); App.go("event");
+                    }) }, "🗑"))))))
+        : UI.empty("No participants", "Add assessors, stewards, SMEs, and leadership viewers."));
+
+    const sCard = el("div", { class: "card" },
+      el("div", { class: "list-toolbar" },
+        el("h3", { class: "card-title" }, "Systems in Scope"),
+        el("button", { class: "btn", onclick: () => editSystem(ev, null) }, "+ Add")),
+      ev.systems.length
+        ? el("table", { class: "data-table" },
+            el("thead", {}, el("tr", {}, ["System", "Layer", "Owner", ""].map((h) => el("th", {}, h)))),
+            el("tbody", {}, ev.systems.map((s) =>
+              el("tr", {},
+                el("td", {}, el("strong", {}, s.name), s.notes ? el("div", { class: "cell-sub" }, s.notes) : null),
+                el("td", {}, s.layer || "—"), el("td", {}, s.owner || "—"),
+                el("td", {},
+                  el("button", { class: "icon-btn", title: "Edit", onclick: () => editSystem(ev, s) }, "✎"),
+                  el("button", { class: "icon-btn danger", title: "Remove", onclick: () =>
+                    UI.confirm("Remove system", `Remove ${s.name}?`, () => {
+                      ev.systems = ev.systems.filter((x) => x.id !== s.id);
+                      Store.save(); App.go("event");
+                    }) }, "🗑"))))))
+        : UI.empty("No systems listed", "List PDPs, PEPs, gateways, data platforms, identity and telemetry systems."));
+
+    wrap.appendChild(pCard);
+    wrap.appendChild(sCard);
+    return wrap;
+  }
+
+  function editPerson(ev, p) {
+    const isNew = !p;
+    const data = p || { id: Store.uid("P"), name: "", org: "", role: DCS_TEMPLATE.APP_ROLES[1], email: "" };
+    const nameI = input({ value: data.name });
+    const orgI = input({ value: data.org });
+    const roleS = select(DCS_TEMPLATE.APP_ROLES, data.role);
+    const emailI = input({ value: data.email, type: "email" });
+    UI.modal(isNew ? "Add Participant" : "Edit Participant", el("div", { class: "form-grid" },
+      field("Name", nameI), field("Organization", orgI), field("Role", roleS), field("Email", emailI)), [
+      { label: "Cancel", onclick: () => {} },
+      { label: isNew ? "Add" : "Save", primary: true, onclick: () => {
+          if (!nameI.value.trim()) { UI.toast("Name is required.", "error"); return false; }
+          Object.assign(data, { name: nameI.value.trim(), org: orgI.value.trim(), role: roleS.value, email: emailI.value.trim() });
+          if (isNew) ev.participants.push(data);
+          Store.save(); App.go("event");
+        } }]);
+  }
+
+  function editSystem(ev, s) {
+    const isNew = !s;
+    const data = s || { id: Store.uid("SYS"), name: "", layer: "", owner: "", notes: "" };
+    const nameI = input({ value: data.name });
+    const layerI = input({ value: data.layer, placeholder: "Application / API / Gateway / Platform / Endpoint…" });
+    const ownI = input({ value: data.owner });
+    const notesI = textarea({ value: data.notes });
+    UI.modal(isNew ? "Add System" : "Edit System", el("div", { class: "form-grid" },
+      field("System Name", nameI), field("Enforcement / Control Layer", layerI),
+      field("Owner", ownI), field("Notes", notesI)), [
+      { label: "Cancel", onclick: () => {} },
+      { label: isNew ? "Add" : "Save", primary: true, onclick: () => {
+          if (!nameI.value.trim()) { UI.toast("Name is required.", "error"); return false; }
+          Object.assign(data, { name: nameI.value.trim(), layer: layerI.value.trim(), owner: ownI.value.trim(), notes: notesI.value.trim() });
+          if (isNew) ev.systems.push(data);
+          Store.save(); App.go("event");
+        } }]);
+  }
+
+  /* ---------------------------------------------------- domain weights */
+  function weightsTab(ev) {
+    const inputs = {};
+    const rows = DCS_TEMPLATE.DOMAINS.map((d) => {
+      const w = input({ type: "number", min: 0, max: 100, value: ev.domainWeights[d.id] ?? d.weight, class: "input weight-input" });
+      inputs[d.id] = w;
+      return el("tr", {},
+        el("td", {}, el("strong", {}, d.name), el("div", { class: "cell-sub" }, d.focus)),
+        el("td", {}, w));
+    });
+    const totalCell = el("td", { class: "weight-total" });
+    const updateTotal = () => {
+      const total = Object.values(inputs).reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
+      totalCell.textContent = `${total}%`;
+      totalCell.className = `weight-total ${total === 100 ? "ok" : "bad"}`;
+    };
+    Object.values(inputs).forEach((i) => i.addEventListener("input", updateTotal));
+    updateTotal();
+
+    return el("div", { class: "card" },
+      el("p", { class: "card-hint" },
+        "Compliance weights determine each domain's contribution to the overall readiness score. Weights should total 100%. Regardless of weights, a failed critical item or open critical finding caps the overall rating (no misleading green)."),
+      el("table", { class: "data-table" },
+        el("thead", {}, el("tr", {}, el("th", {}, "Domain"), el("th", {}, "Weight (%)"))),
+        el("tbody", {}, rows, el("tr", {}, el("td", {}, el("strong", {}, "Total")), totalCell))),
+      el("div", { class: "form-foot" },
+        el("button", { class: "btn", onclick: () => {
+            DCS_TEMPLATE.DOMAINS.forEach((d) => { inputs[d.id].value = d.weight; });
+            updateTotal();
+          } }, "Reset to Defaults"),
+        el("button", { class: "btn btn-primary", onclick: () => {
+            const total = Object.values(inputs).reduce((s, i) => s + (parseFloat(i.value) || 0), 0);
+            if (total !== 100) { UI.toast("Weights must total 100%.", "error"); return; }
+            DCS_TEMPLATE.DOMAINS.forEach((d) => { ev.domainWeights[d.id] = parseFloat(inputs[d.id].value) || 0; });
+            Store.save(); UI.toast("Weights saved.");
+          } }, "Save Weights")));
+  }
+
+  /* --------------------------------------------------------- daily log */
+  function dailyTab(ev) {
+    const wrap = el("div", {});
+    wrap.appendChild(el("div", { class: "list-toolbar" },
+      el("p", { class: "card-hint" }, "Daily rollups during on-site execution: what was assessed, what broke, what was decided, and what happens next (issues → decisions → actions)."),
+      el("button", { class: "btn btn-primary", onclick: () => editLog(ev, null) }, "+ Add Daily Rollup")));
+
+    wrap.appendChild(el("div", { class: "card" },
+      el("h3", { class: "card-title" }, "Recommended On-Site Execution Model"),
+      el("table", { class: "data-table compact" },
+        el("thead", {}, el("tr", {}, ["Day", "DCS Focus", "Assessment Activities"].map((h) => el("th", {}, h)))),
+        el("tbody", {}, DCS_TEMPLATE.EXECUTION_MODEL.map((d) =>
+          el("tr", {}, el("td", {}, el("strong", {}, d.day)), el("td", {}, d.focus), el("td", {}, d.activities)))))));
+
+    if (ev.dailyLogs.length) {
+      ev.dailyLogs.slice().reverse().forEach((log) => {
+        wrap.appendChild(el("div", { class: "card daily-card" },
+          el("div", { class: "list-toolbar" },
+            el("h3", { class: "card-title" }, `${log.day}${log.date ? " — " + log.date : ""} · ${log.focus || ""}`),
+            el("div", {},
+              el("button", { class: "icon-btn", title: "Edit", onclick: () => editLog(ev, log) }, "✎"),
+              el("button", { class: "icon-btn danger", title: "Delete", onclick: () =>
+                UI.confirm("Delete rollup", `Delete the ${log.day} rollup?`, () => {
+                  ev.dailyLogs = ev.dailyLogs.filter((l) => l.id !== log.id);
+                  Store.save(); App.go("event");
+                }) }, "🗑"))),
+          el("dl", { class: "detail-list wide" },
+            el("dt", {}, "Summary"), el("dd", {}, log.summary || "—"),
+            el("dt", {}, "Issues"), el("dd", {}, log.issues || "—"),
+            el("dt", {}, "Decisions"), el("dd", {}, log.decisions || "—"),
+            el("dt", {}, "Actions"), el("dd", {}, log.actions || "—"))));
+      });
+    } else {
+      wrap.appendChild(UI.empty("No daily rollups yet", "Capture a rollup at each day's hotwash."));
+    }
+    return wrap;
+  }
+
+  function editLog(ev, log) {
+    const isNew = !log;
+    const data = log || { id: Store.uid("DL"), day: "Day 1", date: "", focus: "", summary: "", issues: "", decisions: "", actions: "" };
+    const dayS = select(DCS_TEMPLATE.EXECUTION_MODEL.map((d) => d.day), data.day);
+    const dateI = input({ value: data.date, type: "date" });
+    const focusI = input({ value: data.focus });
+    const sumI = textarea({ value: data.summary, rows: 3 });
+    const issI = textarea({ value: data.issues, rows: 2 });
+    const decI = textarea({ value: data.decisions, rows: 2 });
+    const actI = textarea({ value: data.actions, rows: 2 });
+    UI.modal(isNew ? "Add Daily Rollup" : "Edit Daily Rollup", el("div", { class: "form-grid" },
+      field("Day", dayS), field("Date", dateI), field("Focus", focusI),
+      field("Summary", sumI), field("Issues", issI), field("Decisions", decI), field("Actions", actI)), [
+      { label: "Cancel", onclick: () => {} },
+      { label: isNew ? "Add" : "Save", primary: true, onclick: () => {
+          Object.assign(data, { day: dayS.value, date: dateI.value, focus: focusI.value.trim(),
+            summary: sumI.value.trim(), issues: issI.value.trim(), decisions: decI.value.trim(), actions: actI.value.trim() });
+          if (isNew) ev.dailyLogs.push(data);
+          Store.save(); App.go("event");
+        } }]);
+  }
+
+  return { render };
+})();
