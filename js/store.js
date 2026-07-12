@@ -39,6 +39,7 @@ const Store = (() => {
     return Object.assign({
       id: uid("EVT"),
       name: "New DCS Assessment Event",
+      phase: "planning",
       location: "",
       classification: "UNCLASSIFIED",
       eventWindow: "",
@@ -78,7 +79,8 @@ const Store = (() => {
         "Prove mission partner releasable-subset sharing and non-release denial",
         "Prove auditable reconstruction of access and sharing decisions"
       ],
-      isSample: true
+      isSample: true,
+      phase: "execution"
     });
 
     // participants
@@ -249,13 +251,33 @@ const Store = (() => {
   /* ---------------------------------------------------------- persistence */
   function defaultState() {
     const sample = buildSampleEvent();
-    return { version: 1, activeEventId: sample.id, events: [sample], settings: { theme: "auto" } };
+    return { version: 1, activeEventId: sample.id, events: [sample],
+      settings: { theme: "auto" }, lastBackupAt: null };
+  }
+
+  // Bring older stored states up to the current shape without losing data.
+  function migrate(st) {
+    if (st.lastBackupAt === undefined) st.lastBackupAt = null;
+    if (!st.settings) st.settings = { theme: "auto" };
+    st.events.forEach((ev) => {
+      if (!ev.phase) ev.phase = ev.isSample ? "execution" : "planning";
+      if (!ev.dailyLogs) ev.dailyLogs = [];
+      if (!ev.domainWeights) ev.domainWeights = Object.fromEntries(DCS_TEMPLATE.DOMAINS.map((d) => [d.id, d.weight]));
+      // pick up checklist items added to the template after the event was created
+      DCS_TEMPLATE.CHECKLIST.forEach((t) => {
+        if (!ev.checklist.some((c) => c.id === t.id)) {
+          ev.checklist.push({ id: t.id, score: null, result: null, workflow: "not_started",
+            assignee: "", missionThreadIds: [], notes: "", evidenceIds: [], findingIds: [], updatedAt: null });
+        }
+      });
+    });
+    return st;
   }
 
   function load() {
     try {
       const raw = localStorage.getItem(LS_KEY);
-      state = raw ? JSON.parse(raw) : defaultState();
+      state = raw ? migrate(JSON.parse(raw)) : defaultState();
     } catch (e) {
       console.error("State load failed, starting fresh:", e);
       state = defaultState();
@@ -465,13 +487,23 @@ const Store = (() => {
   }
 
   function exportWorkspaceJSON() {
+    state.lastBackupAt = nowISO();
     download("dcs-workspace-backup.json",
-      JSON.stringify({ exported: nowISO(), app: "DCS Assessment Command Center", version: 1, workspace: state }, null, 2));
+      JSON.stringify({ exported: state.lastBackupAt, app: "DCS Assessment Command Center", version: 1, workspace: state }, null, 2));
+    save();
+  }
+
+  // Approximate localStorage footprint (browsers allow ~5 MB per origin).
+  function storageInfo() {
+    let bytes = 0;
+    try { bytes = new Blob([localStorage.getItem(LS_KEY) || ""]).size; } catch (e) { /* estimate only */ }
+    const quota = 5 * 1024 * 1024;
+    return { bytes, quota, pct: bytes / quota };
   }
 
   function importJSON(obj) {
     if (obj && obj.workspace && Array.isArray(obj.workspace.events)) {
-      state = obj.workspace;
+      state = migrate(obj.workspace);
       save();
       return { kind: "workspace" };
     }
@@ -480,6 +512,7 @@ const Store = (() => {
       ev.id = uid("EVT"); // avoid collisions
       state.events.push(ev);
       state.activeEventId = ev.id;
+      migrate(state);
       save();
       return { kind: "event", name: ev.name };
     }
@@ -537,7 +570,7 @@ const Store = (() => {
     getState, activeEvent, setActiveEvent, addEvent, deleteEvent,
     duplicateEventAsTemplate, templateItem, domain,
     computeScores, linkEvidence, unlinkEvidence, deleteEvidence,
-    exportEventJSON, exportWorkspaceJSON, importJSON,
+    exportEventJSON, exportWorkspaceJSON, importJSON, storageInfo,
     exportChecklistCSV, exportFindingsCSV, exportEvidenceCSV, download
   };
 })();

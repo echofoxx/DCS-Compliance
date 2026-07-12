@@ -499,6 +499,15 @@ const DCS_TEMPLATE = (() => {
     { day: "Day 5", focus: "Evidence review and hotwash",  activities: "Close evidence gaps, validate findings with operators, identify critical gaps, and prepare leadership snapshot." }
   ];
 
+  // Event lifecycle phases (white paper §3 assessment approach)
+  const PHASES = [
+    { id: "planning",  label: "Phase 1 · Scope & Planning",    hint: "Define DCS use cases, mission threads, systems, data assets, control points, and expected access outcomes." },
+    { id: "design",    label: "Phase 2 · Assessment Design",   hint: "Build the assessment plan, test cards, DCS compliance checklist, metrics, and evidence capture schema." },
+    { id: "execution", label: "Phase 3 · On-Site Execution",   hint: "Observe DCS controls in operation, execute targeted tests, collect evidence, and validate findings with operators." },
+    { id: "analysis",  label: "Phase 4 · Analysis & Reporting", hint: "Compare expected versus actual outcomes and produce final DCS readiness findings and recommendations." },
+    { id: "complete",  label: "Complete / Archived",           hint: "Final report delivered. Event retained for cross-event comparison." }
+  ];
+
   const APP_ROLES = [
     "Assessment Lead", "DCS Control Assessor", "Mission Thread Lead", "Data Steward",
     "Cyber/ZT SME", "Partner / Coalition SME", "Leadership Viewer"
@@ -515,6 +524,6 @@ const DCS_TEMPLATE = (() => {
     EVIDENCE_TYPES, EVIDENCE_QUALITY, CLASSIFICATIONS,
     DOMAINS, CHECKLIST, TEST_CARD_LIBRARY,
     OUTCOME_ACTIONS, ACCESS_ACTIONS, RED_FLAGS,
-    ROADMAP, EXECUTION_MODEL, APP_ROLES, STANDARDS_OPTIONS
+    ROADMAP, EXECUTION_MODEL, PHASES, APP_ROLES, STANDARDS_OPTIONS
   };
 })();
