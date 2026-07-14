@@ -18,30 +18,44 @@ and the 30/60/90/180-day reporting roadmap.
 
 ## Running the app
 
-No build step, no server, no network dependency — by design, so it can run on-site
-in restricted environments.
-
-**Option 1 — open directly**
-
-Open `index.html` in any modern browser (Chrome, Edge, Firefox).
-
-**Option 2 — local web server** (recommended for daily use so browser storage is
-tied to a stable origin)
+### Docker (recommended) — shared team workspace
 
 ```bash
-python3 -m http.server 8080
-# then browse to http://localhost:8080
+docker compose up -d
+# then browse to http://<host>:8080
 ```
 
-**Option 3 — Docker**
+Or without compose:
 
 ```bash
-docker run -d -p 8080:80 -v "$PWD":/usr/share/nginx/html:ro nginx:alpine
+docker build -t dcs-command-center .
+docker run -d --name dcs-command-center -p 8080:8080 -v dcs-data:/data dcs-command-center
 ```
 
-All data is stored in the browser's `localStorage`. Nothing ever leaves the machine.
-Use **Report Builder → Workspace Backup (JSON)** to back up or move data between
-machines, and **Events ▾ → Import JSON** to restore.
+Docker hosting runs `server.js` (zero-dependency Node), which serves the app
+**and persists the workspace server-side** in the `dcs-data` volume — so the
+whole assessment team browses to one URL and works from one shared store that
+survives container restarts and isn't tied to any single browser.
+
+- **Concurrency-safe:** every save carries the revision it was based on; a
+  stale save gets a 409 and the client re-syncs instead of overwriting a
+  teammate's work. Browsers also poll every 15 s to pick up others' changes.
+- **Offline-tolerant:** if the server drops, changes are kept in the browser
+  and sync when it returns.
+- **Access control:** none by default (on-site trusted network use). Set
+  `BASIC_AUTH_USER` / `BASIC_AUTH_PASS` (see `docker-compose.yml`) for HTTP
+  Basic Auth, or front it with your own reverse proxy / TLS.
+- **Backup the volume:** the workspace lives in `/data/workspace.json`;
+  `docker cp dcs-command-center:/data/workspace.json ./backup.json` — or just
+  use **⬇ Backup Workspace** in the app.
+
+### Standalone (no server)
+
+The same files also run with no backend at all — open `index.html` directly,
+or `python3 -m http.server 8080`. In this mode data stays in the browser's
+`localStorage` (per-browser, per-machine); the app shows which mode it's in at
+the bottom of the sidebar. Use **⬇ Backup Workspace** / **Events ▾ → Import
+JSON** to move data between machines.
 
 > A pre-populated **sample event** loads on first run so every screen has data.
 > Delete it from **Events ▾ → Delete Event** once you create your own.
@@ -97,7 +111,9 @@ Mission Thread → Protected Object → Checklist Item → Test Card → Evidenc
 
 ## Data safety
 
-Data lives in browser `localStorage` (~5 MB). Before and during an event:
+Docker-hosted: the workspace persists in the `/data` volume on the server and
+browsers keep a local offline cache. Standalone: data lives in browser
+`localStorage` (~5 MB). Either way, before and during an event:
 
 - Use **⬇ Backup Workspace** (sidebar) regularly — the footer shows when the last
   backup was taken, and **Events ▾** shows current storage usage.
@@ -109,12 +125,18 @@ Data lives in browser `localStorage` (~5 MB). Before and during an event:
 
 ```
 index.html            App shell (plain script tags — works from file://)
+server.js             Zero-dependency Node server: static app + shared
+                      workspace API with revision-based conflict detection
+Dockerfile            Container image (node:22-alpine, non-root, healthcheck)
+docker-compose.yml    One-command team deployment with a persistent volume
 css/app.css           Styling, light/dark themes, print stylesheet
 js/template.js        The reusable assessment template: domains, 55 checklist
                       items, rubric, severities, test-card library, roadmap
-js/store.js           State, localStorage persistence, scoring engine, exports
+js/store.js           State, persistence (server-synced or localStorage),
+                      scoring engine, exports
 js/ui.js              DOM builders, modal/drawer/toast primitives
 js/charts.js          Gauge, heatmap, bar rows (accessible, palette-validated)
+js/assistant.js       Optional local-AI drafting (Ollama)
 js/view-*.js          One file per screen
 ```
 

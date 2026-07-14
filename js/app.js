@@ -161,7 +161,9 @@ const App = (() => {
           el("button", { class: "btn btn-ghost small", onclick: () => Assistant.configModal(),
             title: "Optional drafting help from a locally hosted model" },
             `✦ Local AI${Assistant.isEnabled() ? " ·on" : ""}`)),
-        el("div", { class: "footer-note" }, "Local-first · data stays in this browser")));
+        el("div", { class: "footer-note" }, Store.isRemote()
+          ? "Server-synced · shared team workspace"
+          : "Local-first · data stays in this browser")));
 
     const topbar = el("header", { class: "topbar" },
       el("div", { class: "topbar-left" },
@@ -184,8 +186,8 @@ const App = (() => {
   }
 
   /* ----------------------------------------------------------------- init */
-  function init() {
-    Store.load();
+  async function init() {
+    await Store.load(); // includes server detection when Docker-hosted
     applyTheme();
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
     document.addEventListener("keydown", (e) => {
@@ -194,7 +196,10 @@ const App = (() => {
     renderShell();
   }
 
-  return { init, go };
+  // Re-render the current view in place (used after remote sync updates).
+  function refresh() { renderShell(); }
+
+  return { init, go, refresh };
 })();
 
 document.addEventListener("DOMContentLoaded", App.init);
