@@ -172,6 +172,30 @@ const ViewFindings = (() => {
     const tcPick = UI.checkList(ev.testCards.map((t) => ({ value: t.id, label: t.title })), data.testCardIds, "f-tc");
     const evPick = UI.checkList(ev.evidence.map((e) => ({ value: e.id, label: `${e.title} (${e.type})` })), data.evidenceIds, "f-ev");
 
+    // optional local-AI draft of impact/recommendation from the linked context
+    const aiBtn = Assistant.draftButton("Draft impact & recommendation", async () => {
+      const checklistIds = UI.checkedValues(clPick, "f-cl");
+      const testIds = UI.checkedValues(tcPick, "f-tc");
+      const evidenceIds = UI.checkedValues(evPick, "f-ev");
+      const result = await Assistant.draftFinding({
+        title: titleI.value.trim(),
+        severity: (DCS_TEMPLATE.SEVERITIES.find((s) => s.id === sevS.value) || {}).label || sevS.value,
+        domain: (Store.domain(domS.value) || {}).name || "",
+        requirements: checklistIds.map((id) => (Store.templateItem(id) || {}).requirement).filter(Boolean),
+        tests: testIds.map((id) => {
+          const t = ev.testCards.find((x) => x.id === id);
+          return t ? `${t.title}: expected ${t.expectedOutcome || "?"}, observed ${t.actualOutcome || "not run"}` : null;
+        }).filter(Boolean),
+        evidence: evidenceIds.map((id) => {
+          const e = ev.evidence.find((x) => x.id === id);
+          return e ? `${e.title} (${e.type}, ${e.quality})` : null;
+        }).filter(Boolean),
+        notes: notesI.value.trim()
+      });
+      if (result.impact) impI.value = result.impact;
+      if (result.recommendation) recI.value = result.recommendation;
+    });
+
     UI.modal(isNew ? "New Finding" : "Edit Finding", el("div", {},
       field("Finding Title", titleI),
       el("div", { class: "form-grid" },
@@ -181,6 +205,8 @@ const ViewFindings = (() => {
         field("Status", stS), field("Mission Thread", mtS)),
       field("Impact", impI),
       field("Recommendation", recI),
+      el("div", { class: "ai-row" }, aiBtn,
+        el("span", { class: "field-hint" }, "Drafts from the linked items, tests, evidence, and notes — review and edit before saving.")),
       field("Notes", notesI),
       el("details", { class: "picker-details", open: isNew && !!presets.checklistIds },
         el("summary", {}, "Linked checklist items"), clPick),

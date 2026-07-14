@@ -156,7 +156,11 @@ const App = (() => {
             renderShell();
           }, title: "Download a JSON backup of every event" }, "⬇ Backup Workspace"),
         el("div", { class: "footer-note" }, backupNote()),
-        el("button", { class: "btn btn-ghost small", onclick: cycleTheme }, "Theme"),
+        el("div", { class: "sidebar-btn-row" },
+          el("button", { class: "btn btn-ghost small", onclick: cycleTheme }, "Theme"),
+          el("button", { class: "btn btn-ghost small", onclick: () => Assistant.configModal(),
+            title: "Optional drafting help from a locally hosted model" },
+            `✦ Local AI${Assistant.isEnabled() ? " ·on" : ""}`)),
         el("div", { class: "footer-note" }, "Local-first · data stays in this browser")));
 
     const topbar = el("header", { class: "topbar" },

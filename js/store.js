@@ -261,6 +261,7 @@ const Store = (() => {
     if (!st.settings) st.settings = { theme: "auto" };
     st.events.forEach((ev) => {
       if (!ev.phase) ev.phase = ev.isSample ? "execution" : "planning";
+      if (ev.execNarrative === undefined) ev.execNarrative = "";
       if (!ev.dailyLogs) ev.dailyLogs = [];
       if (!ev.domainWeights) ev.domainWeights = Object.fromEntries(DCS_TEMPLATE.DOMAINS.map((d) => [d.id, d.weight]));
       // pick up checklist items added to the template after the event was created
@@ -519,6 +520,35 @@ const Store = (() => {
     throw new Error("Unrecognized file: expected a DCS event or workspace export.");
   }
 
+  // RFC-4180-ish CSV parser (quotes, escaped quotes, CRLF). Returns array of
+  // objects keyed by the header row (headers normalized to snake_case).
+  function parseCSV(text) {
+    const rows = [];
+    let row = [], cell = "", inQ = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (inQ) {
+        if (ch === '"') {
+          if (text[i + 1] === '"') { cell += '"'; i++; }
+          else inQ = false;
+        } else cell += ch;
+      } else if (ch === '"') inQ = true;
+      else if (ch === ",") { row.push(cell); cell = ""; }
+      else if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && text[i + 1] === "\n") i++;
+        row.push(cell); cell = "";
+        if (row.some((c) => c !== "")) rows.push(row);
+        row = [];
+      } else cell += ch;
+    }
+    row.push(cell);
+    if (row.some((c) => c !== "")) rows.push(row);
+    if (rows.length < 2) return [];
+    const headers = rows[0].map((h) => h.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, ""));
+    return rows.slice(1).map((r) =>
+      Object.fromEntries(headers.map((h, i) => [h, (r[i] || "").trim()])));
+  }
+
   function csvEscape(v) {
     const s = String(v ?? "");
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
@@ -570,7 +600,7 @@ const Store = (() => {
     getState, activeEvent, setActiveEvent, addEvent, deleteEvent,
     duplicateEventAsTemplate, templateItem, domain,
     computeScores, linkEvidence, unlinkEvidence, deleteEvidence,
-    exportEventJSON, exportWorkspaceJSON, importJSON, storageInfo,
+    exportEventJSON, exportWorkspaceJSON, importJSON, storageInfo, parseCSV,
     exportChecklistCSV, exportFindingsCSV, exportEvidenceCSV, download
   };
 })();

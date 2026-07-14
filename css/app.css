@@ -356,6 +356,13 @@ button.rm-item:hover { background: color-mix(in srgb, var(--accent) 8%, transpar
 .matrix-cell.empty { color: var(--ink-3); background: var(--grid); }
 .storage-warn { color: var(--critical-text); font-weight: 600; }
 
+/* --------------------------------------------------------- AI assistant */
+.ai-btn { border-style: dashed; }
+.ai-btn:disabled { opacity: 0.6; cursor: progress; }
+.ai-row { display: flex; align-items: center; gap: 10px; margin: 4px 0 12px; flex-wrap: wrap; }
+.sidebar-btn-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.toolbar-btns { display: flex; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+
 /* ----------------------------------------------------------------- tabs */
 .tab-bar { display: flex; gap: 4px; border-bottom: 1px solid var(--grid); margin-bottom: 16px; flex-wrap: wrap; }
 .tab {

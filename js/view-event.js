@@ -247,12 +247,86 @@ const ViewEvent = (() => {
         } }]);
   }
 
+  /* ------------------------------------------------------- CSV import */
+  const CSV_SPECS = {
+    participants: {
+      label: "participants",
+      headers: ["name", "organization", "role", "email"],
+      example: ["A. Ramirez", "JS J6", "Assessment Lead", "a.ramirez@example.mil"],
+      toRecord: (r) => ({
+        id: Store.uid("P"), name: r.name || "",
+        org: r.organization || r.org || "",
+        role: DCS_TEMPLATE.APP_ROLES.includes(r.role) ? r.role : (r.role || DCS_TEMPLATE.APP_ROLES[1]),
+        email: r.email || ""
+      }),
+      push: (ev, rec) => ev.participants.push(rec)
+    },
+    assets: {
+      label: "protected data objects",
+      headers: ["name", "type", "owner", "steward", "source_system", "classification",
+        "releasability", "caveats", "mission_tags", "protections", "risk_rating", "notes"],
+      example: ["COP Feed", "Data feed / API", "J3 Operations", "J. Whitfield", "Mission Data Platform",
+        "CUI", "REL TO USA, Coalition (subset)", "Restricted fields: sensor source", "COP",
+        "Field-level redaction; Encryption in transit", "High", ""],
+      toRecord: (r) => ({
+        id: Store.uid("AST"), name: r.name || "", type: r.type || "",
+        owner: r.owner || "", steward: r.steward || "",
+        sourceSystem: r.source_system || "", classification: r.classification || "UNCLASSIFIED",
+        releasability: r.releasability || "", caveats: r.caveats || "",
+        missionTags: r.mission_tags || "",
+        protections: (r.protections || "").split(";").map((s) => s.trim()).filter(Boolean),
+        riskRating: ["High", "Moderate", "Low"].includes(r.risk_rating) ? r.risk_rating : (r.risk_rating || "Moderate"),
+        notes: r.notes || ""
+      }),
+      push: (ev, rec) => ev.assets.push(rec)
+    }
+  };
+
+  function csvTemplate(kind) {
+    const spec = CSV_SPECS[kind];
+    Store.download(`dcs-${kind}-template.csv`,
+      spec.headers.join(",") + "\r\n" + spec.example.map((v) => /[",]/.test(v) ? `"${v}"` : v).join(",") + "\r\n",
+      "text/csv");
+  }
+
+  function importCSV(ev, kind) {
+    const spec = CSV_SPECS[kind];
+    const fi = el("input", { type: "file", accept: ".csv,text/csv" });
+    fi.addEventListener("change", () => {
+      const f = fi.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const rows = Store.parseCSV(String(reader.result));
+          if (!rows.length) { UI.toast("No data rows found. Use the CSV template for the expected columns.", "error"); return; }
+          let added = 0, skipped = 0;
+          rows.forEach((r) => {
+            const rec = spec.toRecord(r);
+            if (!rec.name) { skipped++; return; }
+            spec.push(ev, rec); added++;
+          });
+          Store.save();
+          UI.toast(`Imported ${added} ${spec.label}${skipped ? ` (${skipped} skipped — missing name)` : ""}.`);
+          App.go("event");
+        } catch (err) {
+          UI.toast("Import failed: " + err.message, "error");
+        }
+      };
+      reader.readAsText(f);
+    });
+    fi.click();
+  }
+
   /* --------------------------------------------------- protected assets */
   function assetsTab(ev) {
     const wrap = el("div", {});
     wrap.appendChild(el("div", { class: "list-toolbar" },
       el("p", { class: "card-hint" }, "The protected data object register: what is being protected, who owns it, how it is labeled, and what protections it requires."),
-      el("button", { class: "btn btn-primary", onclick: () => editAsset(ev, null) }, "+ Register Data Object")));
+      el("div", { class: "toolbar-btns" },
+        el("button", { class: "btn", title: "Download the column template", onclick: () => csvTemplate("assets") }, "CSV Template"),
+        el("button", { class: "btn", onclick: () => importCSV(ev, "assets") }, "Import CSV"),
+        el("button", { class: "btn btn-primary", onclick: () => editAsset(ev, null) }, "+ Register Data Object"))));
 
     if (!ev.assets.length) {
       wrap.appendChild(UI.empty("No protected data objects registered", "Register datasets, APIs, files, feeds, messages, or data products protected by DCS controls."));
@@ -353,7 +427,10 @@ const ViewEvent = (() => {
     const pCard = el("div", { class: "card" },
       el("div", { class: "list-toolbar" },
         el("h3", { class: "card-title" }, "Participants & Assessors"),
-        el("button", { class: "btn", onclick: () => editPerson(ev, null) }, "+ Add")),
+        el("div", { class: "toolbar-btns" },
+          el("button", { class: "btn small", title: "Download the column template", onclick: () => csvTemplate("participants") }, "CSV Template"),
+          el("button", { class: "btn small", onclick: () => importCSV(ev, "participants") }, "Import CSV"),
+          el("button", { class: "btn small", onclick: () => editPerson(ev, null) }, "+ Add"))),
       ev.participants.length
         ? el("table", { class: "data-table" },
             el("thead", {}, el("tr", {}, ["Name", "Organization", "Role", ""].map((h) => el("th", {}, h)))),

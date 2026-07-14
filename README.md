@@ -118,6 +118,30 @@ js/charts.js          Gauge, heatmap, bar rows (accessible, palette-validated)
 js/view-*.js          One file per screen
 ```
 
+## Bulk loading (CSV)
+
+**Event Workspace → Participants** and **→ Protected Data Objects** support CSV
+import for rosters and asset registers. Download the **CSV Template** next to
+each Import button for the expected columns; rows without a `name` are skipped
+and reported.
+
+## Optional local AI drafting
+
+**✦ Local AI** (sidebar) connects the app to a model running on the same
+machine via [Ollama](https://ollama.com) — nothing is sent to any cloud service.
+When enabled it can:
+
+- **Draft finding impact & recommendation** text in the finding editor, grounded
+  in the linked checklist items, test results, evidence, and assessor notes.
+- **Draft the executive narrative** in the Report Builder from the event's
+  recorded scores and findings.
+
+Guardrail by design: the assistant only drafts into editable fields. It never
+scores items, never changes results, and never certifies compliance — the
+assessor reviews, edits, and owns everything. Setup: install Ollama, `ollama
+pull llama3.1`, serve the app over `http://localhost` (not `file://`), then
+enable and Test Connection in the Local AI settings.
+
 ## Standards references
 
 - NIST SP 800-207, *Zero Trust Architecture*
