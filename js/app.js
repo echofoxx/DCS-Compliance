@@ -15,7 +15,8 @@ const App = (() => {
     { id: "testcards", label: "Test Cards",       icon: "▦", view: () => ViewTestCards },
     { id: "evidence",  label: "Evidence Locker",  icon: "◈", view: () => ViewEvidence },
     { id: "findings",  label: "Findings",         icon: "⚑", view: () => ViewFindings },
-    { id: "reports",   label: "Report Builder",   icon: "≣", view: () => ViewReports }
+    { id: "reports",   label: "Report Builder",   icon: "≣", view: () => ViewReports },
+    { id: "program",   label: "Program",          icon: "◔", view: () => ViewProgram }
   ];
 
   let current = "dashboard";
@@ -39,6 +40,14 @@ const App = (() => {
     Store.save();
     applyTheme();
     UI.toast(`Theme: ${st.theme}`);
+  }
+
+  /* ------------------------------------------------------- backup status */
+  function backupNote() {
+    const t = Store.getState().lastBackupAt;
+    if (!t) return "No backup yet — download one before the event.";
+    const days = Math.floor((Date.now() - new Date(t).getTime()) / 86400000);
+    return days === 0 ? "Last backup: today" : `Last backup: ${days} day${days === 1 ? "" : "s"} ago`;
   }
 
   /* --------------------------------------------------------- event picker */
@@ -76,8 +85,12 @@ const App = (() => {
 
   function eventMenu() {
     const ev = Store.activeEvent();
+    const su = Store.storageInfo();
     UI.modal("Manage Events", el("div", {},
       el("p", { class: "card-hint" }, `Active event: ${ev.name}`),
+      el("p", { class: `card-hint${su.pct > 0.8 ? " storage-warn" : ""}` },
+        `Browser storage used: ${(su.bytes / 1024).toFixed(0)} KB of ~${(su.quota / 1024 / 1024).toFixed(0)} MB` +
+        (su.pct > 0.8 ? " — nearly full. Export a backup and remove large evidence attachments." : "")),
       el("div", { class: "export-grid" },
         el("button", { class: "btn btn-primary", onclick: () => { newEventModal(); } }, "+ New Event"),
         el("button", { class: "btn", onclick: () => {
@@ -137,7 +150,17 @@ const App = (() => {
         el("div", { class: "workflow-hint" },
           el("strong", {}, "Workflow"),
           "Create event → define scope → add threads & assets → assign checklist → run test cards → attach evidence → score → findings → hotwash → report."),
-        el("button", { class: "btn btn-ghost small", onclick: cycleTheme }, "Theme"),
+        el("button", { class: "btn btn-ghost small", onclick: () => {
+            Store.exportWorkspaceJSON();
+            UI.toast("Workspace backup downloaded.");
+            renderShell();
+          }, title: "Download a JSON backup of every event" }, "⬇ Backup Workspace"),
+        el("div", { class: "footer-note" }, backupNote()),
+        el("div", { class: "sidebar-btn-row" },
+          el("button", { class: "btn btn-ghost small", onclick: cycleTheme }, "Theme"),
+          el("button", { class: "btn btn-ghost small", onclick: () => Assistant.configModal(),
+            title: "Optional drafting help from a locally hosted model" },
+            `✦ Local AI${Assistant.isEnabled() ? " ·on" : ""}`)),
         el("div", { class: "footer-note" }, "Local-first · data stays in this browser")));
 
     const topbar = el("header", { class: "topbar" },
@@ -145,6 +168,8 @@ const App = (() => {
         eventSwitcher(),
         el("button", { class: "btn btn-ghost", onclick: eventMenu, title: "Manage events" }, "Events ▾")),
       el("div", { class: "topbar-right" },
+        el("button", { class: "badge tone-info phase-chip", title: "Assessment phase — change it in Event Workspace → Event Profile", onclick: () => go("event") },
+          ((DCS_TEMPLATE.PHASES.find((p) => p.id === ev.phase) || {}).label || "Phase not set")),
         el("span", { class: `class-banner class-${(ev.classification || "").startsWith("SECRET") ? "high" : "low"}` }, ev.classification || "UNCLASSIFIED"),
         el("span", { class: `rating-chip small tone-${scores.rating.tone}`, title: "Overall readiness (weighted, gated by critical failures)" },
           el("span", { class: "rating-dot", "aria-hidden": "true" }),

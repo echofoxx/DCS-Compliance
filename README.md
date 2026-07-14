@@ -59,6 +59,7 @@ machines, and **Events ▾ → Import JSON** to restore.
 | **Evidence Locker** | Evidence records with type, source system, captured-by, timestamp, classification/handling, quality grade, optional file attachment, and links to checklist items, test cards, and findings. Exportable evidence index |
 | **Findings** | Severity (Critical / Major / Moderate / Observation / Strength), impact, recommendation, owner, due date, remediation status — plus the full traceability chain |
 | **Report Builder** | Print-ready final assessment report (executive summary, scope, methodology, scorecard, detailed results, expected-vs-actual tests, findings, standards coverage, evidence index, daily rollups, roadmap) plus CSV/JSON exports |
+| **Program** | The cross-event view for an assessment *series*: readiness trend event over event, a domain × event maturity matrix with first→latest deltas, program-wide open critical gaps, and the reusable-strengths library |
 
 ## Scoring & compliance engine
 
@@ -81,13 +82,28 @@ Every finding traces end-to-end, and each step is clickable:
 Mission Thread → Protected Object → Checklist Item → Test Card → Evidence → Score → Finding → Recommendation
 ```
 
-## Reusable across events
+## Running a series of assessments
 
+- Every event carries a **lifecycle phase** (Scope & Planning → Assessment Design →
+  On-Site Execution → Analysis & Reporting → Complete), shown in the top bar.
 - Every **new event** instantiates a fresh, unscored copy of the 55-item template.
-- **Reuse as Template** (Events ▾) clones an existing event's scope, threads, assets,
-  weights, assignments, and test cards with all scores/evidence/findings cleared —
-  ready for the next event.
+- **Reuse as Template** (Events ▾ or the Program view) clones an existing event's
+  scope, threads, assets, weights, assignments, and test cards with all
+  scores/evidence/findings cleared — ready for the next event.
+- The **Program view** compares events over time: is maturity improving, which
+  domains keep lagging, which critical gaps are still open anywhere, and which
+  strength patterns should be reused.
 - **Event JSON export/import** moves events between machines or archives them.
+
+## Data safety
+
+Data lives in browser `localStorage` (~5 MB). Before and during an event:
+
+- Use **⬇ Backup Workspace** (sidebar) regularly — the footer shows when the last
+  backup was taken, and **Events ▾** shows current storage usage.
+- Keep large evidence files in your event evidence folder and reference them by
+  name; only small files (<1.5 MB) are stored inside the app.
+- Restore any backup via **Events ▾ → Import JSON**.
 
 ## Repository layout
 
@@ -101,6 +117,30 @@ js/ui.js              DOM builders, modal/drawer/toast primitives
 js/charts.js          Gauge, heatmap, bar rows (accessible, palette-validated)
 js/view-*.js          One file per screen
 ```
+
+## Bulk loading (CSV)
+
+**Event Workspace → Participants** and **→ Protected Data Objects** support CSV
+import for rosters and asset registers. Download the **CSV Template** next to
+each Import button for the expected columns; rows without a `name` are skipped
+and reported.
+
+## Optional local AI drafting
+
+**✦ Local AI** (sidebar) connects the app to a model running on the same
+machine via [Ollama](https://ollama.com) — nothing is sent to any cloud service.
+When enabled it can:
+
+- **Draft finding impact & recommendation** text in the finding editor, grounded
+  in the linked checklist items, test results, evidence, and assessor notes.
+- **Draft the executive narrative** in the Report Builder from the event's
+  recorded scores and findings.
+
+Guardrail by design: the assistant only drafts into editable fields. It never
+scores items, never changes results, and never certifies compliance — the
+assessor reviews, edits, and owns everything. Setup: install Ollama, `ollama
+pull llama3.1`, serve the app over `http://localhost` (not `file://`), then
+enable and Test Connection in the Local AI settings.
 
 ## Standards references
 

@@ -136,8 +136,36 @@ const ViewDashboard = (() => {
             `Did the event prove that protected data can be discovered, labeled, governed, accessed, denied, shared, monitored, and audited under Zero Trust conditions?`)),
         el("div", { class: "view-actions" },
           el("button", { class: "btn", onclick: () => App.go("reports") }, "Open Report Builder"))),
+      gettingStarted(ev, s),
       el("div", { class: "dash-top" }, gaugeCard, tiles),
       el("div", { class: "dash-grid" }, heatCard, barsCard, findingsCard, gapCard, threadCard)));
+  }
+
+  /* Guided setup for a fresh event: shown until planning inputs are done
+     and scoring has started, then it disappears on its own. */
+  function gettingStarted(ev, s) {
+    const checks = ViewEvent.readinessChecks(ev);
+    const planningDone = checks.every((c) => c.ok);
+    const scoringStarted = s.coverage > 0;
+    if (planningDone && scoringStarted) return null;
+
+    const steps = [
+      ...checks.filter((c) => !c.ok).slice(0, 4),
+      ...(!scoringStarted ? [{ label: "Score your first checklist items", ok: false, go: () => App.go("checklist") }] : [])
+    ];
+    if (!steps.length) return null;
+
+    return UI.el("div", { class: "card getting-started" },
+      UI.el("div", { class: "rm-head" },
+        UI.el("h3", { class: "card-title" }, "Getting Started — next steps for this assessment"),
+        UI.el("span", { class: "badge tone-info" },
+          `${checks.filter((c) => c.ok).length} of ${checks.length} planning inputs done`)),
+      UI.el("p", { class: "card-hint" },
+        "Work through planning before execution: scope → mission threads → protected data objects → assignments → test cards. This guide disappears once planning is complete and scoring has started."),
+      UI.el("div", { class: "gs-steps" }, steps.map((c, i) =>
+        UI.el("button", { class: "gs-step", onclick: c.go },
+          UI.el("span", { class: "gs-num" }, String(i + 1)),
+          c.label))));
   }
 
   return { render };

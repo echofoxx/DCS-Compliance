@@ -56,7 +56,27 @@ const ViewReports = (() => {
         el("button", { class: "btn", onclick: () => Store.exportEventJSON(ev) }, "Full Event (JSON)"),
         el("button", { class: "btn", onclick: () => Store.exportWorkspaceJSON() }, "Workspace Backup (JSON)")));
 
+    /* editable executive narrative, included in the report's exec summary */
+    const narrI = el("textarea", { class: "input", rows: 5,
+      placeholder: "Assessor-owned narrative for the executive summary: what the event demonstrated and the leadership takeaway. Left empty, the report shows metrics only.",
+      value: ev.execNarrative || "" });
+    const narrCard = el("div", { class: "card" },
+      el("h3", { class: "card-title" }, "Executive Narrative"),
+      el("p", { class: "card-hint" }, "Appears at the top of the report's Executive Summary. The assessor owns this text."),
+      narrI,
+      el("div", { class: "ai-row" },
+        el("button", { class: "btn btn-primary", onclick: () => {
+            ev.execNarrative = narrI.value.trim();
+            Store.save();
+            UI.toast("Narrative saved.");
+          } }, "Save Narrative"),
+        Assistant.draftButton("Draft from current scores & findings", async () => {
+          narrI.value = await Assistant.draftNarrative(ev, Store.computeScores(ev));
+        }),
+        el("span", { class: "field-hint" }, "The draft is grounded only in this event's recorded scores and findings — review and edit before saving.")));
+
     view.appendChild(el("div", { class: "two-col" }, secPick, exports));
+    view.appendChild(narrCard);
     view.appendChild(el("div", { id: "report-preview" }));
     container.appendChild(view);
   }
@@ -82,6 +102,7 @@ const ViewReports = (() => {
       const openCrit = s.openCriticalFindings.length;
       const strengths = ev.findings.filter((f) => f.severity === "strength");
       h.push(`<section><h2>1. Executive Summary</h2>
+        ${ev.execNarrative ? `<p>${esc(ev.execNarrative).replace(/\n\n+/g, "</p><p>").replace(/\n/g, "<br>")}</p>` : ""}
         <table class="rpt-kv">
           <tr><th>Overall DCS readiness</th><td>${pct(s.overallPct)} — <strong>${esc(s.rating.label)}</strong></td></tr>
           <tr><th>Assessment coverage</th><td>${pct(s.coverage)} of applicable checklist items scored</td></tr>

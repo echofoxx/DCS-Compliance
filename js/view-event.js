@@ -56,16 +56,7 @@ const ViewEvent = (() => {
 
   /* -------------------------------------------------- event readiness meter */
   function readinessMeter(ev) {
-    const checks = [
-      { label: "Event profile complete", ok: !!(ev.name && ev.location && ev.eventWindow && ev.classification) },
-      { label: "Objectives defined", ok: ev.objectives.length > 0 },
-      { label: "Mission threads defined", ok: ev.missionThreads.length > 0 },
-      { label: "Protected data objects registered", ok: ev.assets.length > 0 },
-      { label: "Systems in scope listed", ok: ev.systems.length > 0 },
-      { label: "Assessors assigned", ok: ev.participants.length > 0 },
-      { label: "Checklist items assigned", ok: ev.checklist.some((c) => c.assignee) },
-      { label: "Test cards created", ok: ev.testCards.length > 0 }
-    ];
+    const checks = readinessChecks(ev);
     const done = checks.filter((c) => c.ok).length;
     return el("div", { class: "card readiness-meter" },
       el("div", { class: "rm-head" },
@@ -73,13 +64,38 @@ const ViewEvent = (() => {
         el("span", { class: `badge tone-${done === checks.length ? "good" : done >= 5 ? "warning" : "serious"}` },
           `${done} of ${checks.length} planning inputs complete`)),
       el("div", { class: "rm-grid" }, checks.map((c) =>
-        el("span", { class: `rm-item ${c.ok ? "ok" : ""}` },
+        el("button", { class: `rm-item ${c.ok ? "ok" : ""}`, title: c.ok ? "Done — click to review" : "Click to complete this step",
+            onclick: c.go },
           el("span", { class: "rm-mark", "aria-hidden": "true" }, c.ok ? "✓" : "○"), c.label))));
+  }
+
+  // Shared with the dashboard's Getting Started guide — each check knows
+  // where in the app it gets completed.
+  function readinessChecks(ev) {
+    return [
+      { label: "Event profile complete", ok: !!(ev.name && ev.location && ev.eventWindow && ev.classification),
+        go: () => App.go("event", { tab: "profile" }) },
+      { label: "Objectives defined", ok: ev.objectives.length > 0,
+        go: () => App.go("event", { tab: "profile" }) },
+      { label: "Mission threads defined", ok: ev.missionThreads.length > 0,
+        go: () => App.go("event", { tab: "threads" }) },
+      { label: "Protected data objects registered", ok: ev.assets.length > 0,
+        go: () => App.go("event", { tab: "assets" }) },
+      { label: "Systems in scope listed", ok: ev.systems.length > 0,
+        go: () => App.go("event", { tab: "people" }) },
+      { label: "Assessors assigned", ok: ev.participants.length > 0,
+        go: () => App.go("event", { tab: "people" }) },
+      { label: "Checklist items assigned", ok: ev.checklist.some((c) => c.assignee),
+        go: () => App.go("checklist") },
+      { label: "Test cards created", ok: ev.testCards.length > 0,
+        go: () => App.go("testcards") }
+    ];
   }
 
   /* ------------------------------------------------------------ profile tab */
   function profileTab(ev) {
     const nameI = input({ value: ev.name });
+    const phaseS = select(DCS_TEMPLATE.PHASES.map((p) => ({ value: p.id, label: p.label })), ev.phase || "planning");
     const locI = input({ value: ev.location, placeholder: "e.g., Honolulu, HI" });
     const winI = input({ value: ev.eventWindow, placeholder: "e.g., October 2026 (on-site execution)" });
     const perI = input({ value: ev.assessmentPeriod, placeholder: "e.g., July – December 2026" });
@@ -93,6 +109,7 @@ const ViewEvent = (() => {
     const saveBtn = el("button", {
       class: "btn btn-primary", onclick: () => {
         ev.name = nameI.value.trim() || ev.name;
+        ev.phase = phaseS.value;
         ev.location = locI.value.trim();
         ev.eventWindow = winI.value.trim();
         ev.assessmentPeriod = perI.value.trim();
@@ -103,12 +120,15 @@ const ViewEvent = (() => {
         ev.standards = UI.checkedValues(stdWrap, "std");
         Store.save();
         UI.toast("Event profile saved.");
+        App.go("event", { tab: "profile" }); // refresh topbar phase/classification chips
       }
     }, "Save Profile");
 
     return el("div", { class: "card form-card" },
       el("div", { class: "form-grid" },
         field("Event Name", nameI),
+        field("Assessment Phase", phaseS,
+          (DCS_TEMPLATE.PHASES.find((p) => p.id === (ev.phase || "planning")) || {}).hint),
         field("Location", locI),
         field("Event Window", winI),
         field("Assessment Period", perI),
@@ -227,12 +247,86 @@ const ViewEvent = (() => {
         } }]);
   }
 
+  /* ------------------------------------------------------- CSV import */
+  const CSV_SPECS = {
+    participants: {
+      label: "participants",
+      headers: ["name", "organization", "role", "email"],
+      example: ["A. Ramirez", "JS J6", "Assessment Lead", "a.ramirez@example.mil"],
+      toRecord: (r) => ({
+        id: Store.uid("P"), name: r.name || "",
+        org: r.organization || r.org || "",
+        role: DCS_TEMPLATE.APP_ROLES.includes(r.role) ? r.role : (r.role || DCS_TEMPLATE.APP_ROLES[1]),
+        email: r.email || ""
+      }),
+      push: (ev, rec) => ev.participants.push(rec)
+    },
+    assets: {
+      label: "protected data objects",
+      headers: ["name", "type", "owner", "steward", "source_system", "classification",
+        "releasability", "caveats", "mission_tags", "protections", "risk_rating", "notes"],
+      example: ["COP Feed", "Data feed / API", "J3 Operations", "J. Whitfield", "Mission Data Platform",
+        "CUI", "REL TO USA, Coalition (subset)", "Restricted fields: sensor source", "COP",
+        "Field-level redaction; Encryption in transit", "High", ""],
+      toRecord: (r) => ({
+        id: Store.uid("AST"), name: r.name || "", type: r.type || "",
+        owner: r.owner || "", steward: r.steward || "",
+        sourceSystem: r.source_system || "", classification: r.classification || "UNCLASSIFIED",
+        releasability: r.releasability || "", caveats: r.caveats || "",
+        missionTags: r.mission_tags || "",
+        protections: (r.protections || "").split(";").map((s) => s.trim()).filter(Boolean),
+        riskRating: ["High", "Moderate", "Low"].includes(r.risk_rating) ? r.risk_rating : (r.risk_rating || "Moderate"),
+        notes: r.notes || ""
+      }),
+      push: (ev, rec) => ev.assets.push(rec)
+    }
+  };
+
+  function csvTemplate(kind) {
+    const spec = CSV_SPECS[kind];
+    Store.download(`dcs-${kind}-template.csv`,
+      spec.headers.join(",") + "\r\n" + spec.example.map((v) => /[",]/.test(v) ? `"${v}"` : v).join(",") + "\r\n",
+      "text/csv");
+  }
+
+  function importCSV(ev, kind) {
+    const spec = CSV_SPECS[kind];
+    const fi = el("input", { type: "file", accept: ".csv,text/csv" });
+    fi.addEventListener("change", () => {
+      const f = fi.files[0];
+      if (!f) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const rows = Store.parseCSV(String(reader.result));
+          if (!rows.length) { UI.toast("No data rows found. Use the CSV template for the expected columns.", "error"); return; }
+          let added = 0, skipped = 0;
+          rows.forEach((r) => {
+            const rec = spec.toRecord(r);
+            if (!rec.name) { skipped++; return; }
+            spec.push(ev, rec); added++;
+          });
+          Store.save();
+          UI.toast(`Imported ${added} ${spec.label}${skipped ? ` (${skipped} skipped — missing name)` : ""}.`);
+          App.go("event");
+        } catch (err) {
+          UI.toast("Import failed: " + err.message, "error");
+        }
+      };
+      reader.readAsText(f);
+    });
+    fi.click();
+  }
+
   /* --------------------------------------------------- protected assets */
   function assetsTab(ev) {
     const wrap = el("div", {});
     wrap.appendChild(el("div", { class: "list-toolbar" },
       el("p", { class: "card-hint" }, "The protected data object register: what is being protected, who owns it, how it is labeled, and what protections it requires."),
-      el("button", { class: "btn btn-primary", onclick: () => editAsset(ev, null) }, "+ Register Data Object")));
+      el("div", { class: "toolbar-btns" },
+        el("button", { class: "btn", title: "Download the column template", onclick: () => csvTemplate("assets") }, "CSV Template"),
+        el("button", { class: "btn", onclick: () => importCSV(ev, "assets") }, "Import CSV"),
+        el("button", { class: "btn btn-primary", onclick: () => editAsset(ev, null) }, "+ Register Data Object"))));
 
     if (!ev.assets.length) {
       wrap.appendChild(UI.empty("No protected data objects registered", "Register datasets, APIs, files, feeds, messages, or data products protected by DCS controls."));
@@ -333,7 +427,10 @@ const ViewEvent = (() => {
     const pCard = el("div", { class: "card" },
       el("div", { class: "list-toolbar" },
         el("h3", { class: "card-title" }, "Participants & Assessors"),
-        el("button", { class: "btn", onclick: () => editPerson(ev, null) }, "+ Add")),
+        el("div", { class: "toolbar-btns" },
+          el("button", { class: "btn small", title: "Download the column template", onclick: () => csvTemplate("participants") }, "CSV Template"),
+          el("button", { class: "btn small", onclick: () => importCSV(ev, "participants") }, "Import CSV"),
+          el("button", { class: "btn small", onclick: () => editPerson(ev, null) }, "+ Add"))),
       ev.participants.length
         ? el("table", { class: "data-table" },
             el("thead", {}, el("tr", {}, ["Name", "Organization", "Role", ""].map((h) => el("th", {}, h)))),
@@ -510,5 +607,5 @@ const ViewEvent = (() => {
         } }]);
   }
 
-  return { render };
+  return { render, readinessChecks };
 })();
