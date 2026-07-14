@@ -125,6 +125,24 @@ import for rosters and asset registers. Download the **CSV Template** next to
 each Import button for the expected columns; rows without a `name` are skipped
 and reported.
 
+## Decision-log ingestion & audit reconstruction
+
+**Evidence Locker → ⇪ Ingest Decision Log** imports a PDP/PEP/SIEM decision-log
+export (CSV, JSON array, or NDJSON — see **Log Template** for the reference
+columns; common column aliases from different tools are recognized). Each
+ingest becomes a Decision Record evidence item that carries:
+
+- summary stats (allows, denies, redact/mask, distinct users/assets, average
+  decision latency, time window),
+- **expected-vs-actual comparison** when the export includes an expected
+  outcome column — mismatches are counted and **possible false allows are
+  flagged loudly** (a confirmed false allow is a critical finding, DCS-31),
+- a filterable chronological **audit reconstruction timeline** in the evidence
+  drawer (filter by text, mismatches, allows, or denies).
+
+Ingests are capped at 3,000 records per file to protect browser storage —
+filter exports to the event window first.
+
 ## Optional local AI drafting
 
 **✦ Local AI** (sidebar) connects the app to a model running on the same
