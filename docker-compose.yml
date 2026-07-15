@@ -1,0 +1,25 @@
+# DCS Assessment Command Center
+#   docker compose up -d          → http://localhost:8080
+#
+# The whole team browses to the same URL and works from one shared,
+# server-persisted workspace (survives container restarts via the volume).
+# For access control on a shared network, uncomment the Basic Auth vars
+# or put the service behind your own reverse proxy.
+
+services:
+  dcs-command-center:
+    build: .
+    image: dcs-command-center:latest
+    container_name: dcs-command-center
+    ports:
+      - "8080:8080"
+    volumes:
+      - dcs-data:/data
+    environment:
+      # BASIC_AUTH_USER: assessor
+      # BASIC_AUTH_PASS: change-me
+      PORT: "8080"
+    restart: unless-stopped
+
+volumes:
+  dcs-data:

@@ -289,9 +289,10 @@ const Store = (() => {
       state.activeEventId = ev.id;
     }
     save();
+    return initRemote(); // resolves once server detection completes (no-op on file://)
   }
 
-  function save() {
+  function persistLocal() {
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(state));
     } catch (e) {
@@ -301,8 +302,116 @@ const Store = (() => {
       }
       console.error("Save failed:", e);
     }
-    listeners.forEach((fn) => fn());
   }
+
+  function save() {
+    persistLocal();
+    listeners.forEach((fn) => fn());
+    schedulePush();
+  }
+
+  /* ---------------------------------------------- remote sync (Docker mode)
+   * When the app is served by server.js (the Docker image), the workspace
+   * lives on the server and is shared by the whole team. localStorage stays
+   * as an offline cache. Writes are optimistic: each PUT carries the
+   * revision it was based on; a 409 means someone else saved first, so we
+   * adopt the server state rather than clobbering it. A light poll picks
+   * up teammates' changes between our own saves.
+   * ------------------------------------------------------------------- */
+  const remote = { enabled: false, revision: 0, timer: null, pushing: false, queued: false, offline: false };
+
+  async function api(path, opts) {
+    const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
+    if (res.status === 409) {
+      const j = await res.json().catch(() => ({}));
+      const err = new Error("conflict");
+      err.conflict = true;
+      err.revision = j.revision;
+      throw err;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
+  async function initRemote() {
+    if (typeof location === "undefined" || !/^https?:$/.test(location.protocol)) return;
+    try {
+      const h = await api("api/health");
+      if (!h || !h.ok) return;
+      remote.enabled = true;
+      const ws = await api("api/workspace");
+      if (ws.state && Array.isArray(ws.state.events) && ws.state.events.length) {
+        state = migrate(ws.state);          // server is the source of truth
+        remote.revision = ws.revision;
+        persistLocal();
+      } else {
+        remote.revision = ws.revision;      // first boot: seed with this browser's data
+        await pushNow();
+      }
+      setInterval(pollRemote, 15000);
+    } catch (e) {
+      remote.enabled = false;               // static hosting — stay local-first
+    }
+  }
+
+  function schedulePush() {
+    if (!remote.enabled) return;
+    clearTimeout(remote.timer);
+    remote.timer = setTimeout(() => { remote.timer = null; pushNow(); }, 500);
+  }
+
+  async function pushNow() {
+    if (!remote.enabled) return;
+    if (remote.pushing) { remote.queued = true; return; }
+    remote.pushing = true;
+    try {
+      const resp = await api("api/workspace", {
+        method: "PUT",
+        body: JSON.stringify({ revision: remote.revision, state })
+      });
+      remote.revision = resp.revision;
+      if (remote.offline) {
+        remote.offline = false;
+        UI.toast("Server connection restored — workspace synced.");
+      }
+    } catch (err) {
+      if (err.conflict) {
+        await adoptServerState("Another assessor saved first — loaded the latest shared workspace. Re-apply your last edit if it is missing.", true);
+      } else if (!remote.offline) {
+        remote.offline = true;
+        UI.toast("Server unreachable — changes are kept in this browser and will sync when it returns.", "error");
+      }
+    } finally {
+      remote.pushing = false;
+      if (remote.queued) { remote.queued = false; schedulePush(); }
+    }
+  }
+
+  async function pollRemote() {
+    if (!remote.enabled || remote.pushing || remote.timer) return; // don't race our own pending save
+    try {
+      const r = await api("api/revision");
+      if (r.revision !== remote.revision) {
+        // Don't yank the UI out from under an open editor; next poll retries.
+        if (document.querySelector("#modal-root.open, #drawer-root .drawer")) return;
+        await adoptServerState("Synced updates from another assessor.");
+      }
+      if (remote.offline) { remote.offline = false; UI.toast("Server connection restored — workspace synced."); }
+    } catch (e) { /* transient network issues are fine; push path reports outages */ }
+  }
+
+  async function adoptServerState(message, force) {
+    const ws = await api("api/workspace");
+    if (!ws.state || !Array.isArray(ws.state.events)) return;
+    state = migrate(ws.state);
+    remote.revision = ws.revision;
+    persistLocal();
+    listeners.forEach((fn) => fn());
+    UI.toast(message);
+    if (typeof App !== "undefined" && App.refresh) App.refresh();
+  }
+
+  const isRemote = () => remote.enabled;
 
   const subscribe = (fn) => listeners.push(fn);
 
@@ -596,7 +705,7 @@ const Store = (() => {
   }
 
   return {
-    uid, nowISO, load, save, subscribe,
+    uid, nowISO, load, save, subscribe, isRemote,
     getState, activeEvent, setActiveEvent, addEvent, deleteEvent,
     duplicateEventAsTemplate, templateItem, domain,
     computeScores, linkEvidence, unlinkEvidence, deleteEvidence,

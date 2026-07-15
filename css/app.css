@@ -356,6 +356,24 @@ button.rm-item:hover { background: color-mix(in srgb, var(--accent) 8%, transpar
 .matrix-cell.empty { color: var(--ink-3); background: var(--grid); }
 .storage-warn { color: var(--critical-text); font-weight: 600; }
 
+/* ---------------------------------------------------- audit timeline */
+.audit-stats { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.audit-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 700; background: var(--grid); color: var(--ink-1);
+}
+.audit-chip-label { font-weight: 600; color: var(--ink-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.4px; }
+.audit-chip.tone-critical { background: color-mix(in srgb, var(--critical) 14%, transparent); color: var(--critical-text); }
+.audit-chip.tone-warning { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning-text); }
+.audit-chip.tone-good { background: color-mix(in srgb, var(--good) 14%, transparent); color: var(--good-text); }
+.audit-filter { display: flex; gap: 8px; margin: 8px 0; }
+.audit-filter .input { flex: 1; }
+.audit-filter select { width: auto; flex-shrink: 0; }
+.log-scroll { overflow: auto; max-height: 420px; border: 1px solid var(--grid); border-radius: 8px; }
+.log-scroll .data-table { min-width: 640px; }
+.log-scroll thead th { position: sticky; top: 0; background: var(--surface-1); z-index: 1; }
+tr.log-mismatch td { background: color-mix(in srgb, var(--critical) 7%, transparent); }
+
 /* --------------------------------------------------------- AI assistant */
 .ai-btn { border-style: dashed; }
 .ai-btn:disabled { opacity: 0.6; cursor: progress; }

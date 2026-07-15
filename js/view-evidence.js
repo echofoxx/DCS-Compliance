@@ -11,7 +11,153 @@ const ViewEvidence = (() => {
   const { el, field, input, textarea, select } = UI;
 
   const MAX_ATTACH_BYTES = 1.5 * 1024 * 1024; // localStorage is finite; larger files stay referenced by name/path only
+  const MAX_LOG_RECORDS = 3000;               // cap ingested decision records per evidence item
   const filters = { type: "", quality: "", link: "", q: "" };
+
+  /* ================================================== decision-log ingest
+   * Accepts PDP/PEP/SIEM exports as CSV, a JSON array, {records:[...]},
+   * or NDJSON. Column names are matched against common aliases so exports
+   * from different tools normalize into the white paper's evidence schema.
+   * ==================================================================== */
+  const LOG_ALIASES = {
+    timestamp: ["timestamp", "time", "datetime", "date", "event_time", "_timestamp"],
+    user:      ["user", "requestor", "subject", "username", "principal", "consumer_system_or_user", "consumer"],
+    asset:     ["asset", "resource", "object", "target", "protected_asset_id", "data_object", "asset_id"],
+    action:    ["action", "access_action", "operation", "request_action"],
+    decision:  ["decision", "actual_outcome", "actual_dcs_outcome", "outcome", "result", "pdp_decision"],
+    expected:  ["expected", "expected_outcome", "expected_dcs_outcome"],
+    reason:    ["reason", "reason_code", "policy_id", "policy", "rule", "rule_id"],
+    pep:       ["pep", "pep_result", "enforcement", "enforcement_result", "enforcement_point"],
+    latencyMs: ["latency_ms", "decision_latency_ms", "latency", "response_time_ms"]
+  };
+
+  function normalizeLogRecord(raw) {
+    const lower = {};
+    Object.keys(raw).forEach((k) => {
+      lower[k.toLowerCase().replace(/^@/, "_").replace(/[^a-z0-9_]+/g, "_")] = raw[k];
+    });
+    const pick = (field) => {
+      for (const alias of LOG_ALIASES[field]) {
+        if (lower[alias] !== undefined && lower[alias] !== null && String(lower[alias]).trim() !== "")
+          return String(lower[alias]).trim();
+      }
+      return "";
+    };
+    const rec = {
+      timestamp: pick("timestamp"), user: pick("user"), asset: pick("asset"),
+      action: pick("action"), decision: pick("decision"), expected: pick("expected"),
+      reason: pick("reason"), pep: pick("pep"),
+      latencyMs: parseFloat(pick("latencyMs")) || null
+    };
+    return (rec.decision || rec.user || rec.asset) ? rec : null;
+  }
+
+  // Classify free-text decisions so different tools compare consistently.
+  function decisionClass(text) {
+    const t = (text || "").toLowerCase();
+    if (!t) return "unknown";
+    if (/(allow|permit|grant|success|200|accepted)/.test(t)) return "allow";
+    if (/(deny|denied|block|reject|refuse|forbid|403|401|quarantine)/.test(t)) return "deny";
+    if (/(redact|mask|filter|partial|watermark)/.test(t)) return "modified";
+    if (/(alert|review|manual)/.test(t)) return "review";
+    return "unknown";
+  }
+
+  function logStats(records) {
+    const s = { total: records.length, allow: 0, deny: 0, modified: 0, other: 0,
+      compared: 0, mismatches: 0, falseAllows: 0, falseDenies: 0,
+      latencies: [], users: new Set(), assets: new Set(), firstTs: "", lastTs: "" };
+    records.forEach((r) => {
+      const dc = decisionClass(r.decision);
+      if (dc === "allow") s.allow++; else if (dc === "deny") s.deny++;
+      else if (dc === "modified") s.modified++; else s.other++;
+      if (r.expected) {
+        const ec = decisionClass(r.expected);
+        if (ec !== "unknown" && dc !== "unknown") {
+          s.compared++;
+          if (ec !== dc) {
+            s.mismatches++;
+            if (ec === "deny" && dc === "allow") s.falseAllows++;
+            if (ec === "allow" && dc === "deny") s.falseDenies++;
+          }
+        }
+      }
+      if (r.latencyMs !== null) s.latencies.push(r.latencyMs);
+      if (r.user) s.users.add(r.user);
+      if (r.asset) s.assets.add(r.asset);
+      if (r.timestamp) {
+        if (!s.firstTs || r.timestamp < s.firstTs) s.firstTs = r.timestamp;
+        if (!s.lastTs || r.timestamp > s.lastTs) s.lastTs = r.timestamp;
+      }
+    });
+    s.avgLatency = s.latencies.length ? s.latencies.reduce((a, b) => a + b, 0) / s.latencies.length : null;
+    return s;
+  }
+
+  function parseLogFile(name, text) {
+    let rows = [];
+    if (/\.json$/i.test(name) || /^\s*[\[{]/.test(text)) {
+      try {
+        const data = JSON.parse(text);
+        rows = Array.isArray(data) ? data : (Array.isArray(data.records) ? data.records : null);
+        if (!rows) throw new Error("not an array");
+      } catch (e) {
+        // NDJSON: one JSON object per line
+        rows = text.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => {
+          try { return JSON.parse(l); } catch (e2) { return null; }
+        }).filter(Boolean);
+      }
+    } else {
+      rows = Store.parseCSV(text);
+    }
+    return rows.map(normalizeLogRecord).filter(Boolean).slice(0, MAX_LOG_RECORDS);
+  }
+
+  function ingestLog(ev) {
+    const fi = el("input", { type: "file", accept: ".csv,.json,.ndjson,.log,text/csv,application/json" });
+    fi.addEventListener("change", () => {
+      const f = fi.files[0];
+      if (!f) return;
+      if (f.size > 8 * 1024 * 1024) { UI.toast("Log file over 8 MB — filter the export to the event window first.", "error"); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const records = parseLogFile(f.name, String(reader.result));
+        if (!records.length) {
+          UI.toast("No decision records recognized. Expected columns like timestamp, user, asset, decision (see Log Template).", "error");
+          return;
+        }
+        const s = logStats(records);
+        const rec = {
+          id: Store.uid("EVD"),
+          title: `Decision log ingest — ${f.name}`,
+          type: "Decision Record",
+          sourceSystem: "", capturedBy: "", capturedAt: Store.nowISO(),
+          classification: ev.classification || "UNCLASSIFIED",
+          quality: "strong",
+          description: `Ingested ${s.total} decision record(s): ${s.allow} allow, ${s.deny} deny, ${s.modified} redact/mask/filter. ` +
+            (s.compared ? `${s.mismatches} of ${s.compared} compared records mismatch expected outcomes (${s.falseAllows} false allow, ${s.falseDenies} false deny). ` : "") +
+            (s.avgLatency !== null ? `Avg decision latency ${Math.round(s.avgLatency)} ms.` : ""),
+          fileName: f.name, fileDataUrl: "", fileSize: f.size,
+          records,
+          links: { checklist: [], testCards: [], findings: [] }
+        };
+        ev.evidence.push(rec);
+        Store.save();
+        UI.toast(`Ingested ${s.total} records${s.falseAllows ? ` — ⚠ ${s.falseAllows} possible FALSE ALLOW(S)` : ""}.`, s.falseAllows ? "error" : "ok");
+        App.go("evidence", { open: rec.id });
+      };
+      reader.readAsText(f);
+    });
+    fi.click();
+  }
+
+  function logTemplate() {
+    Store.download("dcs-decision-log-template.csv",
+      "timestamp,user,asset,action,decision,expected,reason,pep_result,latency_ms\r\n" +
+      "2026-10-14T09:12:03Z,partner.x.analyst,COP Feed,read,DENY,deny,REL-NOMATCH-004,403 returned,95\r\n" +
+      "2026-10-14T09:14:22Z,us.watch.officer,COP Feed,read,PERMIT,allow,ROLE-J3-COP,served,120\r\n",
+      "text/csv");
+  }
 
   function render(container, params = {}) {
     const ev = Store.activeEvent();
@@ -26,6 +172,8 @@ const ViewEvidence = (() => {
         el("h1", {}, "Evidence Locker"),
         el("p", { class: "view-sub" }, "Every score and finding should trace to evidence here: who captured it, where it came from, when, under what handling, and what it proves.")),
       el("div", { class: "view-actions" },
+        el("button", { class: "btn", title: "Column reference for decision-log exports", onclick: logTemplate }, "Log Template"),
+        el("button", { class: "btn", title: "Import a PDP/PEP/SIEM decision log export (CSV, JSON, or NDJSON)", onclick: () => ingestLog(ev) }, "⇪ Ingest Decision Log"),
         el("button", { class: "btn", onclick: () => Store.exportEvidenceCSV(ev) }, "Export Evidence Index"),
         el("button", { class: "btn btn-primary", onclick: () => editEvidence(ev, null) }, "+ Add Evidence"))));
 
@@ -120,6 +268,7 @@ const ViewEvidence = (() => {
       e.fileDataUrl && e.fileDataUrl.startsWith("data:image")
         ? el("div", { class: "evidence-preview" }, el("img", { src: e.fileDataUrl, alt: e.title }))
         : null,
+      e.records && e.records.length ? auditTimeline(e) : null,
       e.fileName ? el("div", { class: "drawer-actions" },
         e.fileDataUrl
           ? el("a", { class: "btn", href: e.fileDataUrl, download: e.fileName }, `Download ${e.fileName}`)
@@ -135,6 +284,94 @@ const ViewEvidence = (() => {
         (id) => App.go("findings", { open: id })),
       el("div", { class: "drawer-actions" },
         el("button", { class: "btn btn-primary", onclick: () => { UI.closeDrawer(); editEvidence(ev, e); } }, "Edit"))));
+  }
+
+  /* --------------------------------------------- audit reconstruction */
+  // Rendered inside the drawer for ingested decision-log evidence: summary
+  // stats, false-allow alerting, and a filterable chronological timeline.
+  function auditTimeline(e) {
+    const s = logStats(e.records);
+    const wrap = el("div", { class: "audit-timeline" });
+
+    wrap.appendChild(el("h4", { class: "drawer-h" }, "Audit Reconstruction"));
+    if (s.falseAllows) {
+      wrap.appendChild(el("div", { class: "gate-note" },
+        el("strong", {}, `⚠ ${s.falseAllows} possible FALSE ALLOW record(s): `),
+        "expected deny, observed allow. Verify against the expected allow/deny matrix — a confirmed false allow is a critical finding (DCS-31)."));
+    }
+    wrap.appendChild(el("div", { class: "audit-stats" },
+      statChip("Records", s.total),
+      statChip("Allows", s.allow),
+      statChip("Denies", s.deny),
+      statChip("Redact/Mask", s.modified),
+      s.compared ? statChip("Mismatches", `${s.mismatches}/${s.compared}`, s.mismatches ? "critical" : "good") : null,
+      s.falseDenies ? statChip("False denies", s.falseDenies, "warning") : null,
+      s.avgLatency !== null ? statChip("Avg latency", `${Math.round(s.avgLatency)} ms`) : null,
+      statChip("Users", s.users.size),
+      statChip("Assets", s.assets.size)));
+
+    if (s.firstTs) {
+      wrap.appendChild(el("p", { class: "card-hint" }, `Window: ${s.firstTs} → ${s.lastTs}`));
+    }
+
+    // filter + table (chronological)
+    const q = el("input", { class: "input", placeholder: "Filter timeline (user, asset, decision, reason)…" });
+    const only = UI.select([
+      { value: "", label: "All records" },
+      { value: "mismatch", label: "Mismatches only" },
+      { value: "deny", label: "Denies only" },
+      { value: "allow", label: "Allows only" }
+    ], "");
+    const tableWrap = el("div", { class: "log-scroll" });
+
+    const renderRows = () => {
+      const needle = q.value.toLowerCase();
+      const sorted = e.records.slice().sort((a, b) => (a.timestamp || "").localeCompare(b.timestamp || ""));
+      const list = sorted.filter((r) => {
+        const dc = decisionClass(r.decision);
+        const mismatch = r.expected && decisionClass(r.expected) !== "unknown" && dc !== "unknown" &&
+          decisionClass(r.expected) !== dc;
+        if (only.value === "mismatch" && !mismatch) return false;
+        if (only.value === "deny" && dc !== "deny") return false;
+        if (only.value === "allow" && dc !== "allow") return false;
+        if (needle && !(`${r.user} ${r.asset} ${r.decision} ${r.reason} ${r.action}`.toLowerCase().includes(needle))) return false;
+        return true;
+      });
+      const shown = list.slice(0, 300);
+      tableWrap.innerHTML = "";
+      tableWrap.appendChild(el("table", { class: "data-table compact" },
+        el("thead", {}, el("tr", {}, ["Time", "User", "Asset", "Action", "Decision", "Expected", "Reason / Policy"].map((h) => el("th", {}, h)))),
+        el("tbody", {}, shown.map((r) => {
+          const dc = decisionClass(r.decision);
+          const mismatch = r.expected && decisionClass(r.expected) !== "unknown" && dc !== "unknown" &&
+            decisionClass(r.expected) !== dc;
+          return el("tr", { class: mismatch ? "log-mismatch" : "" },
+            el("td", {}, r.timestamp || "—"),
+            el("td", {}, r.user || "—"),
+            el("td", {}, r.asset || "—"),
+            el("td", {}, r.action || "—"),
+            el("td", {}, UI.badge(r.decision || "—", dc === "allow" ? "good" : dc === "deny" ? "info" : dc === "modified" ? "warning" : "muted")),
+            el("td", {}, r.expected ? UI.badge(r.expected, mismatch ? "critical" : "muted") : "—"),
+            el("td", {}, [r.reason, r.pep].filter(Boolean).join(" · ") || "—"));
+        }))));
+      if (list.length > shown.length) {
+        tableWrap.appendChild(el("p", { class: "empty-mini" }, `Showing first ${shown.length} of ${list.length} matching records — refine the filter to narrow further.`));
+      }
+      if (!list.length) tableWrap.appendChild(el("p", { class: "empty-mini" }, "No records match the filter."));
+    };
+    let timer;
+    q.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(renderRows, 200); });
+    only.addEventListener("change", renderRows);
+
+    wrap.appendChild(el("div", { class: "audit-filter" }, q, only));
+    renderRows();
+    wrap.appendChild(tableWrap);
+    return wrap;
+  }
+
+  function statChip(label, value, tone) {
+    return el("span", { class: `audit-chip${tone ? " tone-" + tone : ""}` },
+      el("span", { class: "audit-chip-label" }, label), String(value));
   }
 
   /* ------------------------------------------------------------ edit form */
