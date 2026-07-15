@@ -648,16 +648,21 @@ AI** → *Enable local AI drafting* → **Test Connection** → *Save*.
 
 v1.0 remains available as a downloadable release for teams that don't need
 multi-user Postgres and just want the local-first, single-user workbench.
+Two routes:
 
-- **Git tag:** [`v1.0.0`](https://github.com/echofoxx/DCS-Compliance/releases/tag/v1.0.0)
-- **From the command line:**
+- **`v1-legacy` branch** (available now) — this is v1's last revision published
+  as a permanent branch so it can be cloned or downloaded straight from
+  GitHub:
   ```bash
-  git checkout v1.0.0
+  git clone -b v1-legacy https://github.com/echofoxx/DCS-Compliance.git dcs-v1
   # or, without the working tree:
-  git archive --format=zip v1.0.0 > dcs-v1.0.0.zip
+  git archive --format=zip --remote=<url> v1-legacy > dcs-v1.zip
   ```
-- **From GitHub:** open the tag page and use **Code → Download ZIP** (or
-  `Source code` under Releases).
+  On the GitHub UI: **branch selector → `v1-legacy` → Code → Download ZIP**.
+- **`v1.0.0` release tag** — cut a proper GitHub release from the
+  `v1-legacy` branch (Releases → *Draft a new release* → choose target
+  `v1-legacy`, tag `v1.0.0`) so downloads carry the semantic-version tag and
+  the release page carries the v1 changelog.
 
 v1.0 characteristics you should expect:
 
