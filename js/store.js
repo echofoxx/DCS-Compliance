@@ -1,14 +1,13 @@
 /* =========================================================================
  * DCS Assessment Command Center — Store
- * State management, localStorage persistence, scoring engine, import/export.
- * Local-first by design: all data lives in the browser; a full event (or the
- * whole workspace) can be exported/imported as JSON for transfer or backup.
+ * State management, authenticated API persistence, scoring, import/export.
+ * The server database is authoritative. Browser memory is only a working copy;
+ * classified assessment records are not retained in localStorage.
  * ========================================================================= */
 
 "use strict";
 
 const Store = (() => {
-  const LS_KEY = "dcs_command_center_v1";
   let state = null;
   const listeners = [];
 
@@ -276,30 +275,14 @@ const Store = (() => {
   }
 
   function load() {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      state = raw ? migrate(JSON.parse(raw)) : defaultState();
-    } catch (e) {
-      console.error("State load failed, starting fresh:", e);
-      state = defaultState();
-    }
-    if (!state.events.length) {
-      const ev = newEvent();
-      state.events.push(ev);
-      state.activeEventId = ev.id;
-    }
-    save();
-    return initRemote(); // resolves once server detection completes (no-op on file://)
+    state = { version: 2, activeEventId: null, events: [], settings: { theme: localStorage.getItem("dcs_theme") || "auto" }, lastBackupAt: null };
+    return initRemote();
   }
 
   function persistLocal() {
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify(state));
+      localStorage.setItem("dcs_theme", state.settings.theme || "auto");
     } catch (e) {
-      // Most likely quota exceeded from large evidence attachments.
-      if (typeof UI !== "undefined" && UI.toast) {
-        UI.toast("Storage limit reached — remove large evidence attachments or export/backup your data.", "error");
-      }
       console.error("Save failed:", e);
     }
   }
@@ -310,10 +293,9 @@ const Store = (() => {
     schedulePush();
   }
 
-  /* ---------------------------------------------- remote sync (Docker mode)
-   * When the app is served by server.js (the Docker image), the workspace
-   * lives on the server and is shared by the whole team. localStorage stays
-   * as an offline cache. Writes are optimistic: each PUT carries the
+  /* ---------------------------------------------- authenticated server sync
+   * The database contains the assessments visible to the signed-in user.
+   * Writes are optimistic: each PUT carries the
    * revision it was based on; a 409 means someone else saved first, so we
    * adopt the server state rather than clobbering it. A light poll picks
    * up teammates' changes between our own saves.
@@ -321,37 +303,35 @@ const Store = (() => {
   const remote = { enabled: false, revision: 0, timer: null, pushing: false, queued: false, offline: false };
 
   async function api(path, opts) {
-    const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
-    if (res.status === 409) {
-      const j = await res.json().catch(() => ({}));
-      const err = new Error("conflict");
-      err.conflict = true;
-      err.revision = j.revision;
-      throw err;
-    }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    try { return await Auth.request(path, opts); }
+    catch (err) { if (err.status === 409) { err.conflict = true; err.revision = err.payload?.revision; } throw err; }
   }
 
   async function initRemote() {
-    if (typeof location === "undefined" || !/^https?:$/.test(location.protocol)) return;
-    try {
-      const h = await api("api/health");
-      if (!h || !h.ok) return;
-      remote.enabled = true;
-      const ws = await api("api/workspace");
-      if (ws.state && Array.isArray(ws.state.events) && ws.state.events.length) {
-        state = migrate(ws.state);          // server is the source of truth
-        remote.revision = ws.revision;
-        persistLocal();
-      } else {
-        remote.revision = ws.revision;      // first boot: seed with this browser's data
-        await pushNow();
-      }
-      setInterval(pollRemote, 15000);
-    } catch (e) {
-      remote.enabled = false;               // static hosting — stay local-first
+    const h = await api("/api/health");
+    if (!h || !h.ok) throw new Error("Application health check failed.");
+    remote.enabled = true;
+    const ws = await api("/api/workspace");
+    Auth.setAccess(ws.access);
+    if (ws.state && Array.isArray(ws.state.events) && ws.state.events.length) {
+      const preferred = state.activeEventId;
+      state = migrate(ws.state);
+      if (preferred && state.events.some((e) => e.id === preferred)) state.activeEventId = preferred;
+      remote.revision = ws.revision;
+    } else if (Auth.globalPermissions().includes("assessment.create") && !Auth.user().forcePasswordChange) {
+      state = Auth.feature("seedSampleData") ? defaultState() : (() => { const ev = newEvent({ name: "New DCS Assessment" }); return { version: 2, activeEventId: ev.id, events: [ev], settings: { theme: state.settings.theme }, lastBackupAt: null }; })();
+      remote.revision = ws.revision;
+      await pushNow();
+      const seeded = await api("/api/workspace");
+      Auth.setAccess(seeded.access);
+      state = migrate(seeded.state);
+      remote.revision = seeded.revision;
+    } else {
+      state = migrate(ws.state || state);
+      remote.revision = ws.revision;
     }
+    persistLocal();
+    setInterval(pollRemote, 15000);
   }
 
   function schedulePush() {
@@ -370,6 +350,12 @@ const Store = (() => {
         body: JSON.stringify({ revision: remote.revision, state })
       });
       remote.revision = resp.revision;
+      if (state.events.some((event) => !Auth.assessmentAccess(event.id).roleId)) {
+        const refreshed = await api("/api/workspace");
+        Auth.setAccess(refreshed.access);
+        state = migrate(refreshed.state);
+        remote.revision = refreshed.revision;
+      }
       if (remote.offline) {
         remote.offline = false;
         UI.toast("Server connection restored — workspace synced.");
@@ -377,9 +363,10 @@ const Store = (() => {
     } catch (err) {
       if (err.conflict) {
         await adoptServerState("Another assessor saved first — loaded the latest shared workspace. Re-apply your last edit if it is missing.", true);
-      } else if (!remote.offline) {
+      } else {
+        if (!remote.offline) UI.toast(err.message || "The save was rejected. Reloading the authorized server state.", "error");
         remote.offline = true;
-        UI.toast("Server unreachable — changes are kept in this browser and will sync when it returns.", "error");
+        await adoptServerState("Your unsaved local change was discarded; the current authorized version was reloaded.", true).catch(() => {});
       }
     } finally {
       remote.pushing = false;
@@ -404,6 +391,7 @@ const Store = (() => {
     const ws = await api("api/workspace");
     if (!ws.state || !Array.isArray(ws.state.events)) return;
     state = migrate(ws.state);
+    Auth.setAccess(ws.access);
     remote.revision = ws.revision;
     persistLocal();
     listeners.forEach((fn) => fn());
@@ -593,22 +581,21 @@ const Store = (() => {
 
   function exportEventJSON(ev) {
     download(`dcs-event-${slug(ev.name)}.json`,
-      JSON.stringify({ exported: nowISO(), app: "DCS Assessment Command Center", version: 1, event: ev }, null, 2));
+      JSON.stringify({ exported: nowISO(), app: "DCS Assessment Command Center", version: 2, event: ev }, null, 2));
   }
 
   function exportWorkspaceJSON() {
     state.lastBackupAt = nowISO();
     download("dcs-workspace-backup.json",
-      JSON.stringify({ exported: state.lastBackupAt, app: "DCS Assessment Command Center", version: 1, workspace: state }, null, 2));
+      JSON.stringify({ exported: state.lastBackupAt, app: "DCS Assessment Command Center", version: 2, workspace: state }, null, 2));
     save();
   }
 
-  // Approximate localStorage footprint (browsers allow ~5 MB per origin).
+  // Compatibility helper retained for older extensions; assessment content is server-backed.
   function storageInfo() {
-    let bytes = 0;
-    try { bytes = new Blob([localStorage.getItem(LS_KEY) || ""]).size; } catch (e) { /* estimate only */ }
-    const quota = 5 * 1024 * 1024;
-    return { bytes, quota, pct: bytes / quota };
+    const bytes = new Blob([JSON.stringify(state)]).size;
+    const quota = 32 * 1024 * 1024;
+    return { bytes, quota, pct: bytes / quota, serverBacked: true };
   }
 
   function importJSON(obj) {

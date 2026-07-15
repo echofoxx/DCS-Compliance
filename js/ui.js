@@ -159,11 +159,20 @@ const UI = (() => {
     el("div", { class: "empty-title" }, title),
     hint ? el("div", { class: "empty-hint" }, hint) : null);
 
+  function attribution(record) {
+    const a = record?._attribution;
+    if (!a?.updatedBy) return null;
+    const name = a.updatedBy.displayName || a.updatedBy.username || "Unknown user";
+    return el("div", { class: "attribution-line", title: `Record attribution · revision ${a.revision || "—"}` },
+      el("span", { class: "avatar" }, String(name).split(/\s+/).map((x) => x[0]).join("").slice(0, 2).toUpperCase()),
+      el("span", {}, "Last updated by ", el("strong", {}, name), " · ", fmtDate(a.updatedAt)));
+  }
+
   return {
     el, frag, fmtDate, pct, esc,
     badge, severityBadge, resultBadge, workflowBadge, qualityBadge, scorePill,
     toast, modal, confirm, drawer, closeDrawer,
-    field, input, textarea, select, checkList, checkedValues, empty,
+    field, input, textarea, select, checkList, checkedValues, empty, attribution,
     SEVERITY_TONE, RESULT_TONE
   };
 })();

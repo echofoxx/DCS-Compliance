@@ -1,7 +1,7 @@
 /* =========================================================================
  * DCS Assessment Command Center — Evidence Locker view
  * Evidence records with chain-of-custody metadata, optional file
- * attachments (stored locally as data URLs), quality grading, and
+ * attachments (stored in the database as encoded evidence payloads), quality grading, and
  * traceability links to checklist items, test cards, and findings.
  * ========================================================================= */
 
@@ -10,7 +10,7 @@
 const ViewEvidence = (() => {
   const { el, field, input, textarea, select } = UI;
 
-  const MAX_ATTACH_BYTES = 1.5 * 1024 * 1024; // localStorage is finite; larger files stay referenced by name/path only
+  const MAX_ATTACH_BYTES = 5 * 1024 * 1024;   // protects API/database performance; larger files remain external references
   const MAX_LOG_RECORDS = 3000;               // cap ingested decision records per evidence item
   const filters = { type: "", quality: "", link: "", q: "" };
 
@@ -257,6 +257,7 @@ const ViewEvidence = (() => {
       })) : el("p", { class: "empty-mini" }, "None."));
 
     UI.drawer(e.title, `Evidence · ${e.type}`, el("div", {},
+      UI.attribution(e),
       el("dl", { class: "detail-list" },
         el("dt", {}, "Evidence ID"), el("dd", {}, e.id),
         el("dt", {}, "Source System"), el("dd", {}, e.sourceSystem || "—"),

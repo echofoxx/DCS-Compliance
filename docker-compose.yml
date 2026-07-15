@@ -1,25 +1,55 @@
-# DCS Assessment Command Center
-#   docker compose up -d          → http://localhost:8080
-#
-# The whole team browses to the same URL and works from one shared,
-# server-persisted workspace (survives container restarts via the volume).
-# For access control on a shared network, uncomment the Basic Auth vars
-# or put the service behind your own reverse proxy.
+name: dcs-compliance
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: dcs-compliance-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-dcs}
+      POSTGRES_USER: ${POSTGRES_USER:-dcs}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ChangeThisDatabasePassword}
+    volumes:
+      - dcs-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks: [dcs-internal]
+
   dcs-command-center:
     build: .
-    image: dcs-command-center:latest
-    container_name: dcs-command-center
-    ports:
-      - "8080:8080"
-    volumes:
-      - dcs-data:/data
+    image: dcs-assessment-command-center:2.0.0
+    container_name: dcs-compliance-app
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      # BASIC_AUTH_USER: assessor
-      # BASIC_AUTH_PASS: change-me
       PORT: "8080"
+      DATABASE_URL: postgres://${POSTGRES_USER:-dcs}:${POSTGRES_PASSWORD:-ChangeThisDatabasePassword}@postgres:5432/${POSTGRES_DB:-dcs}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-ChangeMe!DCS2026}
+      ADMIN_DISPLAY_NAME: ${ADMIN_DISPLAY_NAME:-DCS System Administrator}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+      SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      MAX_BODY_MB: ${MAX_BODY_MB:-32}
+      SEED_SAMPLE_DATA: ${SEED_SAMPLE_DATA:-true}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     restart: unless-stopped
+    networks: [dcs-internal]
 
 volumes:
-  dcs-data:
+  dcs-postgres-data:
+
+networks:
+  dcs-internal:
+    driver: bridge

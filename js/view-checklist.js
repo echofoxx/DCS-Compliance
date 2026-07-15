@@ -188,6 +188,7 @@ const ViewChecklist = (() => {
       } }, "Generate Finding");
 
     UI.drawer(c.id, d.name, el("div", {},
+      UI.attribution(c),
       el("div", { class: "drawer-req" }, t.requirement),
       el("dl", { class: "detail-list" },
         el("dt", {}, "Assessment Question"), el("dd", {}, t.question),

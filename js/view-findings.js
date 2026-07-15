@@ -130,6 +130,7 @@ const ViewFindings = (() => {
 
   function openFinding(ev, f) {
     UI.drawer(f.title, `Finding · ${(Store.domain(f.domainId) || {}).name || ""}`, el("div", {},
+      UI.attribution(f),
       el("div", { class: "chip-row" },
         UI.severityBadge(f.severity),
         UI.badge(STATUSES.find((s) => s.id === f.status)?.label || f.status, STATUS_TONE[f.status] || "muted")),
