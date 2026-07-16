@@ -70,6 +70,8 @@ drafting, CSV imports, print-ready Report Builder, cross-event Program view.
 | Capability | What it does |
 |---|---|
 | Full assessment lifecycle | Scope & Planning → Assessment Design → On-Site Execution → Analysis & Reporting, tracked as an explicit event **phase** |
+| Framework Mode | Per-assessment selector — **NATO Only / US Only / Combined / Custom** — drives which checklist items are in scope for this event |
+| Partial Scope | Assess a subset of the checklist per assessment: bulk-exclude whole domains (with a required rationale) or set scope per item; the readiness score and critical gate honor scope |
 | 55-item DCS compliance checklist | All white-paper items across 10 domains, each with an assessment question, expected evidence, severity-if-failed, and NIST 800-53 / DoD ZT / CISA / NSA standards mappings |
 | Scenario test cards | Expected vs. actual DCS outcome, PDP/PEP results, latency, one-click "convert failure to finding" |
 | Evidence Locker with chain of custody | Typed records with source, captured-by, timestamp, classification, quality grade, and file attachments |
@@ -157,6 +159,13 @@ Getting Started card — appears on the dashboard of a fresh event and
 disappears on its own once planning is complete and scoring begins.
 
 ![Getting Started](docs/screenshots/12-getting-started.png)
+
+Assessment Scope — pick a Framework Mode (NATO Only / US Only / Combined /
+Custom) and shape the in-scope subset of the checklist per domain. Out-of-scope
+items are excluded from the readiness score, evidence completeness, and the
+critical gate, and the report auto-generates a Scope Statement explaining why.
+
+![Assessment Scope](docs/screenshots/13-assessment-scope.png)
 
 ---
 
@@ -283,15 +292,29 @@ anyone touches a control.
    Owners at minimum.
 3. **Event Profile** — record objectives, participating organizations,
    assessment period, and standards alignment. Set **Assessment Phase** to
-   *Scope & Planning*.
-4. **Mission Threads** — add each operational scenario the DCS capability must
+   *Scope & Planning* and pick the **Framework Mode**:
+   - *Combined (US + NATO)* — default; all framework-tagged items are in scope
+   - *US Only* — only items with a US framework reference
+   - *NATO Only* — only items with a NATO framework reference
+   - *Custom* — Assessment Lead picks the exact item set; requires a scope
+     rationale that appears in the final report
+4. **Assessment Scope** *(new tab)* — bulk-exclude any DCS domain that this
+   event does not exercise (e.g., turn off Domain 5.7 Sharing & Partner
+   Controls when partner sharing is not being tested), with a required "why"
+   note that appears in the report's Scope Statement. Per-item scope
+   overrides are set from the checklist drill-in drawer.
+5. **Mission Threads** — add each operational scenario the DCS capability must
    support. Every checklist item and test card gets tied back to one of these.
-5. **Protected Data Objects** — register the datasets, APIs, feeds, files, and
+6. **Protected Data Objects** — register the datasets, APIs, feeds, files, and
    data products that the assessment will exercise. Use *CSV Template →
    Import CSV* for bulk loading.
-6. **Participants & Systems** — record the systems in scope (PDPs, PEPs,
+7. **Participants & Systems** — record the systems in scope (PDPs, PEPs,
    gateways, data platforms, telemetry). Participants also accept CSV import.
-7. **Compliance Weights** — accept the defaults or adjust.
+8. **Compliance Weights** — accept the defaults or adjust.
+
+The **framework chip** in the top bar and the checklist header always show the
+active mode and in-scope count, so the whole team stays aligned on what is
+actually being assessed.
 
 **Check:** the **Event Readiness Meter** tracks 8 planning inputs. The
 Dashboard shows a **Getting Started** card until planning is complete.
@@ -722,19 +745,27 @@ v2 (*Events ▾ → Import JSON*); attribution is added on import.
   graceful shutdown, healthcheck
 - ✅ `pg_dump` / `pg_restore` backup and restore scripts
 - ✅ `node --test` coverage for RBAC and audit-chain invariants
+- ✅ **Framework Mode** — NATO Only / US Only / Combined / Custom
+  per-assessment selector with server-side RBAC (Assessment Scope tab in
+  the Event Workspace, chip in the top bar, checklist header updates)
+- ✅ **Partial Scope** — bulk domain exclusion with required rationale,
+  per-item scope overrides, framework-driven scope, and a
+  scope-aware scoring engine that redistributes domain weights when whole
+  domains are excluded so the overall stays a normalized 0..1. The
+  generated report auto-includes an Assessment Scope Statement
 
 ### Planned
 
 **Next up (in priority order):**
 
-- ⬜ **Framework Mode** — per-assessment selector for **NATO Only / US Only /
-  Combined / Custom**, driving which checklist items are in-scope. Persisted
-  server-side; gated by `assessment.plan.edit`; locked after Submit unless
-  formally reopened.
-- ⬜ **Partial Scope** — assess parts of the checklist, not all 55.
-  Per-item `in_scope / out_of_scope / not_applicable`, bulk selection by
-  domain with a required *"why"* note, Custom-mode item picker, and scope
-  preset export / import. Scoring engine and coverage tiles honor scope.
+- ✅ **Framework Mode** — per-assessment selector for **NATO Only / US Only /
+  Combined / Custom**, driving which checklist items are in scope. Persisted
+  server-side; gated by `assessment.plan.edit`. *(delivered)*
+- ✅ **Partial Scope** — assess parts of the checklist, not all 55.
+  Per-item `in_scope / out_of_scope / not_applicable` with a required
+  rationale, bulk selection by domain, and framework-driven scope. Scoring
+  engine and critical gate honor scope; the report auto-generates a Scope
+  Statement. *(delivered)*
 - ⬜ **NATO checklist content** — new domain 5.11 (Coalition Interoperability
   & NATO Alignment), items `DCS-56` through `DCS-65`, and structured US ↔
   NATO ↔ Joint standards mappings (STANAG 4774, 4778, 5636, CMBAC,

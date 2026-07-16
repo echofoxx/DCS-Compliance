@@ -9,7 +9,7 @@
 const ViewChecklist = (() => {
   const { el, field, input, textarea, select } = UI;
 
-  const filters = { domain: "", result: "", workflow: "", severity: "", evidence: "", assignee: "", thread: "", q: "" };
+  const filters = { domain: "", result: "", workflow: "", severity: "", evidence: "", assignee: "", thread: "", scope: "", q: "" };
 
   function render(container, params = {}) {
     // apply deep-link params from dashboard tiles
@@ -20,10 +20,13 @@ const ViewChecklist = (() => {
     container.innerHTML = "";
     const view = el("div", { class: "view" });
 
+    const scores = Store.computeScores(ev);
+    const modeMeta = DCS_TEMPLATE.FRAMEWORK_MODES.find((m) => m.id === (ev.frameworkMode || "combined")) || {};
+
     view.appendChild(el("div", { class: "view-head" },
       el("div", {},
         el("h1", {}, "DCS Compliance Checklist"),
-        el("p", { class: "view-sub" }, "55 compliance checks across 10 DCS domains, from the DCS Assessment Framework. Score with the 0–4 maturity rubric; every score should be backed by linked evidence.")),
+        el("p", { class: "view-sub" }, `${scores.inScopeCount} in-scope items · Framework mode: ${modeMeta.label}. Score with the 0–4 maturity rubric; every score should be backed by linked evidence.`)),
       el("div", { class: "view-actions" },
         el("button", { class: "btn", onclick: () => bulkAssign(ev) }, "Bulk Assign"),
         el("button", { class: "btn", onclick: () => Store.exportChecklistCSV(ev) }, "Export CSV"))));
@@ -96,6 +99,7 @@ const ViewChecklist = (() => {
       mk("severity", DCS_TEMPLATE.SEVERITIES.filter((s) => ["critical", "major", "moderate"].includes(s.id))
         .map((s) => ({ value: s.id, label: `Severity: ${s.label}` })), "Any severity"),
       mk("evidence", [{ value: "missing", label: "Missing evidence" }, { value: "has", label: "Has evidence" }], "Evidence: any"),
+      mk("scope", [{ value: "in", label: "In scope only" }, { value: "out", label: "Out of scope only" }, { value: "all", label: "Show all (incl. out of scope)" }], "Scope: in only"),
       assignees.length ? mk("assignee", assignees.map((a) => ({ value: a, label: a })), "Any owner") : null,
       ev.missionThreads.length ? mk("thread", ev.missionThreads.map((m) => ({ value: m.id, label: m.name })), "Any mission thread") : null,
       el("button", { class: "btn btn-ghost", onclick: () => { resetFilters(); App.go("checklist"); } }, "Clear"));
@@ -105,8 +109,15 @@ const ViewChecklist = (() => {
   function debounce(fn, ms) { return (...a) => { clearTimeout(debounceTimer); debounceTimer = setTimeout(() => fn(...a), ms); }; }
 
   function filtered(ev) {
+    // Default view hides out-of-scope items so assessors work only on what
+    // matters. "Show all" surfaces them for review; "Out of scope only" is
+    // the audit view.
+    const scopeFilter = filters.scope || "in";
     return ev.checklist.filter((c) => {
       const t = Store.templateItem(c.id);
+      const inScope = Store.isInScope(ev, c);
+      if (scopeFilter === "in" && !inScope) return false;
+      if (scopeFilter === "out" && inScope) return false;
       if (filters.domain && t.domainId !== filters.domain) return false;
       if (filters.result && c.result !== filters.result) return false;
       if (filters.workflow && c.workflow !== filters.workflow) return false;
@@ -125,8 +136,10 @@ const ViewChecklist = (() => {
 
   function row(ev, c) {
     const t = Store.templateItem(c.id);
-    return el("tr", { class: "clickable", onclick: () => openItem(ev, c) },
-      el("td", { class: "cell-id" }, c.id),
+    const inScope = Store.isInScope(ev, c);
+    return el("tr", { class: `clickable${inScope ? "" : " row-out-of-scope"}`, onclick: () => openItem(ev, c) },
+      el("td", { class: "cell-id" }, c.id,
+        !inScope ? el("div", { class: "cell-sub" }, UI.badge("out of scope", "muted")) : null),
       el("td", {}, t.requirement,
         c.missionThreadIds.length ? el("div", { class: "cell-sub" },
           "Threads: " + c.missionThreadIds.map((id) => (ev.missionThreads.find((m) => m.id === id) || {}).name).filter(Boolean).join(", ")) : null),
@@ -135,7 +148,7 @@ const ViewChecklist = (() => {
       el("td", {}, UI.workflowBadge(c.workflow)),
       el("td", {}, c.evidenceIds.length
         ? UI.badge(`${c.evidenceIds.length} linked`, "good")
-        : UI.badge("none", c.score !== null ? "serious" : "muted")),
+        : UI.badge("none", c.score !== null && inScope ? "serious" : "muted")),
       el("td", {}, c.assignee || "—"),
       el("td", {}, UI.severityBadge(t.severity)));
   }
@@ -152,8 +165,11 @@ const ViewChecklist = (() => {
       [{ value: "", label: "—" }, ...DCS_TEMPLATE.RESULT_STATES.map((r) => ({ value: r.id, label: r.label }))],
       c.result || "");
     const wfS = select(DCS_TEMPLATE.WORKFLOW_STATES.map((w) => ({ value: w.id, label: w.label })), c.workflow);
+    const scopeS = select(DCS_TEMPLATE.SCOPE_STATES.map((s) => ({ value: s.id, label: s.label })), c.scope || "in_scope");
+    const scopeReasonI = input({ value: c.scopeReason || "", placeholder: "Why is this item out of scope or N/A? (recorded in the report)" });
     const ownI = input({ value: c.assignee, placeholder: "Assessor responsible" });
     const notesI = textarea({ value: c.notes, rows: 4, placeholder: "Observations, caveats, and context for this score…" });
+    const frameworkAllows = Store.itemInFrameworkMode(c.id, ev.frameworkMode);
     const threadPick = UI.checkList(ev.missionThreads.map((m) => ({ value: m.id, label: m.name })), c.missionThreadIds, "cl-threads");
     const evidencePick = UI.checkList(ev.evidence.map((e) => ({ value: e.id, label: `${e.title} (${e.type})` })), c.evidenceIds, "cl-evidence");
 
@@ -161,9 +177,15 @@ const ViewChecklist = (() => {
     const linkedFindings = ev.findings.filter((f) => f.checklistIds.includes(c.id));
 
     const saveBtn = el("button", { class: "btn btn-primary", onclick: () => {
+        if (scopeS.value !== "in_scope" && !scopeReasonI.value.trim()) {
+          UI.toast("A scope reason is required when marking an item out of scope or N/A.", "error");
+          return;
+        }
         c.score = scoreS.value === "" ? null : parseInt(scoreS.value, 10);
         c.result = resultS.value || null;
         c.workflow = wfS.value;
+        c.scope = scopeS.value;
+        c.scopeReason = scopeReasonI.value.trim();
         c.assignee = ownI.value.trim();
         c.notes = notesI.value.trim();
         c.missionThreadIds = UI.checkedValues(threadPick, "cl-threads");
@@ -196,6 +218,14 @@ const ViewChecklist = (() => {
         el("dt", {}, "Severity if Failed"), el("dd", {}, UI.severityBadge(t.severity)),
         el("dt", {}, "Standards Mapping"), el("dd", {}, el("div", { class: "chip-row" }, t.standards.map((s) => UI.badge(s, "info")))),
         el("dt", {}, "Last Updated"), el("dd", {}, UI.fmtDate(c.updatedAt))),
+
+      el("h4", { class: "drawer-h" }, "Scope"),
+      !frameworkAllows ? el("div", { class: "gate-note" },
+        "This item is out of scope by framework mode. Change the assessment's Framework Mode in Event Workspace → Event Profile to include it.") : null,
+      el("div", { class: "form-grid" },
+        field("Scope", scopeS,
+          "In-scope items count toward readiness. Out-of-scope items are excluded from scoring and the critical gate."),
+        field("Reason (required if not In scope)", scopeReasonI)),
 
       el("h4", { class: "drawer-h" }, "Assessment"),
       el("div", { class: "form-grid" },

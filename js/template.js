@@ -28,6 +28,34 @@ const DCS_TEMPLATE = (() => {
     { score: 4, label: "Operationally Ready",     meaning: "DCS outcome worked under realistic mission conditions with audit trail and measurable value." }
   ];
 
+  /* ----------------------------------------------------------- framework */
+  /* Every assessment picks one framework mode. In us_only / nato_only mode
+     the checklist is filtered to items that carry at least one standards
+     reference in that framework. Combined shows everything (default). Custom
+     lets the Assessment Lead pick the exact item set. Existing items shipped
+     to date are US-anchored; NATO-tagged items land with Phase 2. */
+  const FRAMEWORK_MODES = [
+    { id: "combined",  label: "Combined (US + NATO)",  short: "Combined",
+      hint: "Default. All framework-tagged items are in scope; the report distinguishes US vs NATO vs joint coverage." },
+    { id: "us_only",   label: "US Only",               short: "US",
+      hint: "Only items with a US framework reference are in scope. NATO-only items are excluded." },
+    { id: "nato_only", label: "NATO Only",             short: "NATO",
+      hint: "Only items with a NATO framework reference are in scope. US-only items are excluded." },
+    { id: "custom",    label: "Custom scope",          short: "Custom",
+      hint: "The Assessment Lead picks the exact set of items to assess. Use for special-purpose or partial reviews." }
+  ];
+
+  /* Per-item framework tags. Given the current library is US-anchored, the
+     default here is ["US"]; NATO-only or joint items add their tags when
+     the NATO content library lands in Phase 2. */
+  const DEFAULT_FRAMEWORKS = ["US"];
+
+  const SCOPE_STATES = [
+    { id: "in_scope",       label: "In scope",       tone: "info" },
+    { id: "out_of_scope",   label: "Out of scope",   tone: "muted" },
+    { id: "not_applicable", label: "Not applicable", tone: "muted" }
+  ];
+
   const RESULT_STATES = [
     { id: "pass",    label: "Pass" },
     { id: "partial", label: "Partial" },
@@ -524,6 +552,7 @@ const DCS_TEMPLATE = (() => {
     EVIDENCE_TYPES, EVIDENCE_QUALITY, CLASSIFICATIONS,
     DOMAINS, CHECKLIST, TEST_CARD_LIBRARY,
     OUTCOME_ACTIONS, ACCESS_ACTIONS, RED_FLAGS,
-    ROADMAP, EXECUTION_MODEL, PHASES, APP_ROLES, STANDARDS_OPTIONS
+    ROADMAP, EXECUTION_MODEL, PHASES, APP_ROLES, STANDARDS_OPTIONS,
+    FRAMEWORK_MODES, DEFAULT_FRAMEWORKS, SCOPE_STATES
   };
 })();

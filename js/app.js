@@ -179,9 +179,12 @@ const App = (() => {
             `✦ Local AI${Assistant.isEnabled() ? " ·on" : ""}`)),
         el("div", { class: "footer-note" }, `Database-backed · attributed as ${Auth.user().username}`)));
 
+    const modeMeta = DCS_TEMPLATE.FRAMEWORK_MODES.find((m) => m.id === (ev && ev.frameworkMode || "combined")) || {};
     const statusNodes = ev ? [
       el("button", { class: "badge tone-info phase-chip", title: "Assessment phase — change it in Event Workspace → Event Profile", onclick: () => go("event") },
         ((DCS_TEMPLATE.PHASES.find((p) => p.id === ev.phase) || {}).label || "Phase not set")),
+      el("button", { class: "badge tone-muted phase-chip", title: `Framework mode: ${modeMeta.label}. Change it in Event Workspace → Event Profile.`, onclick: () => go("event") },
+        `Framework: ${modeMeta.short || "Combined"}`),
       el("span", { class: `class-banner class-${(ev.classification || "").startsWith("SECRET") ? "high" : "low"}` }, ev.classification || "UNCLASSIFIED"),
       el("span", { class: `rating-chip small tone-${scores.rating.tone}`, title: "Overall readiness (weighted, gated by critical failures)" },
         el("span", { class: "rating-dot", "aria-hidden": "true" }),

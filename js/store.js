@@ -25,6 +25,8 @@ const Store = (() => {
       score: null,               // 0-4 or null (unscored)
       result: null,              // pass | partial | fail | no | na
       workflow: "not_started",   // not_started | in_progress | complete | blocked
+      scope: "in_scope",         // in_scope | out_of_scope | not_applicable
+      scopeReason: "",           // why this item is out-of-scope (for the report)
       assignee: "",
       missionThreadIds: [],
       notes: "",
@@ -34,11 +36,25 @@ const Store = (() => {
     }));
   }
 
+  /* True when the checklist item is US-only under the current framework mode
+     (or NATO-only, or excluded from a Custom scope). Framework tags default
+     to ["US"] for the existing library. */
+  function itemInFrameworkMode(itemId, mode) {
+    if (!mode || mode === "combined" || mode === "custom") return true;
+    const tpl = DCS_TEMPLATE.CHECKLIST.find((t) => t.id === itemId);
+    const tags = (tpl && tpl.frameworks) || DCS_TEMPLATE.DEFAULT_FRAMEWORKS;
+    if (mode === "us_only")   return tags.includes("US") || tags.includes("JOINT");
+    if (mode === "nato_only") return tags.includes("NATO") || tags.includes("JOINT");
+    return true;
+  }
+
   function newEvent(fields = {}) {
     return Object.assign({
       id: uid("EVT"),
       name: "New DCS Assessment Event",
       phase: "planning",
+      frameworkMode: "combined",   // combined | us_only | nato_only | custom
+      customScopeNote: "",         // rationale surfaced in the report for Custom mode
       location: "",
       classification: "UNCLASSIFIED",
       eventWindow: "",
@@ -263,12 +279,23 @@ const Store = (() => {
       if (ev.execNarrative === undefined) ev.execNarrative = "";
       if (!ev.dailyLogs) ev.dailyLogs = [];
       if (!ev.domainWeights) ev.domainWeights = Object.fromEntries(DCS_TEMPLATE.DOMAINS.map((d) => [d.id, d.weight]));
+      // Framework Mode + Partial Scope migration (introduced 2027):
+      // pre-existing events default to combined (no behavior change) and
+      // every checklist item is in_scope.
+      if (!ev.frameworkMode) ev.frameworkMode = "combined";
+      if (ev.customScopeNote === undefined) ev.customScopeNote = "";
       // pick up checklist items added to the template after the event was created
       DCS_TEMPLATE.CHECKLIST.forEach((t) => {
         if (!ev.checklist.some((c) => c.id === t.id)) {
           ev.checklist.push({ id: t.id, score: null, result: null, workflow: "not_started",
+            scope: "in_scope", scopeReason: "",
             assignee: "", missionThreadIds: [], notes: "", evidenceIds: [], findingIds: [], updatedAt: null });
         }
+      });
+      // Backfill scope fields on items that predate this feature.
+      ev.checklist.forEach((c) => {
+        if (!c.scope) c.scope = "in_scope";
+        if (c.scopeReason === undefined) c.scopeReason = "";
       });
     });
     return st;
@@ -458,12 +485,24 @@ const Store = (() => {
   }
 
   /* -------------------------------------------------------- scoring engine */
-  // An item counts toward scoring when it is applicable (result !== 'na')
-  // and has a score. Domain % = mean(score)/4. Overall = weight-blended
-  // domain %, over domains that have at least one scored item.
+  // An item counts toward scoring when it is in-scope, applicable (result !==
+  // 'na'), and has a score. Domain % = mean(score)/4. Overall = weight-blended
+  // domain %, over domains that have at least one scored in-scope item.
+  //
+  // Framework Mode + Partial Scope both filter through this: an item is
+  // in-scope when its scope field is in_scope AND (framework mode is
+  // combined/custom OR the item's framework tags intersect the mode).
+  function isInScope(ev, c) {
+    if (c.scope && c.scope !== "in_scope") return false;
+    return itemInFrameworkMode(c.id, ev.frameworkMode);
+  }
+
   function computeScores(ev) {
+    const inScope = ev.checklist.filter((c) => isInScope(ev, c));
+    const outOfScope = ev.checklist.length - inScope.length;
+
     const domains = DCS_TEMPLATE.DOMAINS.map((d) => {
-      const items = ev.checklist.filter((c) => templateItem(c.id).domainId === d.id);
+      const items = inScope.filter((c) => templateItem(c.id).domainId === d.id);
       const applicable = items.filter((c) => c.result !== "na");
       const scored = applicable.filter((c) => c.score !== null && c.result !== "no");
       const avg = scored.length ? scored.reduce((s, c) => s + c.score, 0) / scored.length : null;
@@ -471,35 +510,40 @@ const Store = (() => {
       return {
         id: d.id, name: d.name, short: d.short,
         weight: ev.domainWeights[d.id] ?? d.weight,
-        itemCount: items.length,
+        itemCount: items.length,          // in-scope items only
         applicable: applicable.length,
         scoredCount: scored.length,
         avgScore: avg,                       // 0-4 or null
         pct: avg === null ? null : avg / 4,  // 0-1 or null
         evidencePct: applicable.length ? withEvidence / applicable.length : 0,
-        failures: applicable.filter((c) => c.result === "fail").length
+        failures: applicable.filter((c) => c.result === "fail").length,
+        inScope: items.length > 0            // domain has any in-scope item?
       };
     });
 
-    const rated = domains.filter((d) => d.pct !== null);
-    const wSum = rated.reduce((s, d) => s + d.weight, 0);
-    const overallPct = wSum ? rated.reduce((s, d) => s + d.pct * d.weight, 0) / wSum : null;
+    // Weights are redistributed across domains that have at least one
+    // in-scope item so the overall stays a normalized 0..1 even when whole
+    // domains are excluded from the assessment.
+    const contributing = domains.filter((d) => d.inScope && d.pct !== null);
+    const wSum = contributing.reduce((s, d) => s + d.weight, 0);
+    const overallPct = wSum ? contributing.reduce((s, d) => s + d.pct * d.weight, 0) / wSum : null;
 
-    const allApplicable = ev.checklist.filter((c) => c.result !== "na");
+    const allApplicable = inScope.filter((c) => c.result !== "na");
     const allScored = allApplicable.filter((c) => c.score !== null && c.result !== "no");
     const coverage = allApplicable.length ? allScored.length / allApplicable.length : 0;
     const evidenceCompleteness = allApplicable.length
       ? allApplicable.filter((c) => c.evidenceIds.length > 0).length / allApplicable.length : 0;
 
     /* red-flag gate: a failed critical checklist item or an open critical
-       finding caps the rating — no green dashboard over a critical gap. */
-    const criticalItemFails = ev.checklist.filter(
+       finding caps the rating — no green dashboard over a critical gap.
+       Out-of-scope items are excluded here too: they can't trip the gate. */
+    const criticalItemFails = inScope.filter(
       (c) => c.result === "fail" && templateItem(c.id).severity === "critical"
     );
     const redFlags = DCS_TEMPLATE.RED_FLAGS.filter((rf) =>
       rf.itemIds.some((id) => {
         const it = ev.checklist.find((c) => c.id === id);
-        return it && it.result === "fail";
+        return it && it.result === "fail" && isInScope(ev, it);
       })
     );
     const openCriticalFindings = ev.findings.filter(
@@ -518,6 +562,9 @@ const Store = (() => {
     return {
       domains, overallPct, coverage, evidenceCompleteness, rating, gated,
       criticalItemFails, openCriticalFindings, redFlags,
+      inScopeCount: inScope.length,
+      outOfScopeCount: outOfScope,
+      frameworkMode: ev.frameworkMode || "combined",
       openFindingsBySeverity: Object.fromEntries(
         DCS_TEMPLATE.SEVERITIES.map((s) => [
           s.id, ev.findings.filter((f) => f.severity === s.id && f.status !== "closed").length
@@ -697,6 +744,7 @@ const Store = (() => {
     duplicateEventAsTemplate, templateItem, domain,
     computeScores, linkEvidence, unlinkEvidence, deleteEvidence,
     exportEventJSON, exportWorkspaceJSON, importJSON, storageInfo, parseCSV,
-    exportChecklistCSV, exportFindingsCSV, exportEvidenceCSV, download
+    exportChecklistCSV, exportFindingsCSV, exportEvidenceCSV, download,
+    isInScope, itemInFrameworkMode
   };
 })();

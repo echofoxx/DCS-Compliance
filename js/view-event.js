@@ -13,6 +13,7 @@ const ViewEvent = (() => {
 
   const TABS = [
     { id: "profile",  label: "Event Profile" },
+    { id: "scope",    label: "Assessment Scope" },
     { id: "threads",  label: "Mission Threads" },
     { id: "assets",   label: "Protected Data Objects" },
     { id: "people",   label: "Participants & Systems" },
@@ -33,6 +34,7 @@ const ViewEvent = (() => {
 
     const body = el("div", { class: "tab-body" });
     if (activeTab === "profile") body.appendChild(profileTab(ev));
+    if (activeTab === "scope")   body.appendChild(scopeTab(ev));
     if (activeTab === "threads") body.appendChild(threadsTab(ev, params));
     if (activeTab === "assets")  body.appendChild(assetsTab(ev));
     if (activeTab === "people")  body.appendChild(peopleTab(ev));
@@ -96,6 +98,7 @@ const ViewEvent = (() => {
   function profileTab(ev) {
     const nameI = input({ value: ev.name });
     const phaseS = select(DCS_TEMPLATE.PHASES.map((p) => ({ value: p.id, label: p.label })), ev.phase || "planning");
+    const modeS = select(DCS_TEMPLATE.FRAMEWORK_MODES.map((m) => ({ value: m.id, label: m.label })), ev.frameworkMode || "combined");
     const locI = input({ value: ev.location, placeholder: "e.g., Honolulu, HI" });
     const winI = input({ value: ev.eventWindow, placeholder: "e.g., October 2026 (on-site execution)" });
     const perI = input({ value: ev.assessmentPeriod, placeholder: "e.g., July – December 2026" });
@@ -110,6 +113,17 @@ const ViewEvent = (() => {
       class: "btn btn-primary", onclick: () => {
         ev.name = nameI.value.trim() || ev.name;
         ev.phase = phaseS.value;
+        const oldMode = ev.frameworkMode;
+        ev.frameworkMode = modeS.value;
+        // Auto-reconcile scope when switching modes: framework-driven scope
+        // is derived on the fly by isInScope(), so no per-item mutation is
+        // needed here. When switching *out* of Custom, clear any manual
+        // out_of_scope markers that were only meaningful in Custom mode.
+        if (oldMode === "custom" && ev.frameworkMode !== "custom") {
+          ev.checklist.forEach((c) => {
+            if (c.scope === "out_of_scope") { c.scope = "in_scope"; c.scopeReason = ""; }
+          });
+        }
         ev.location = locI.value.trim();
         ev.eventWindow = winI.value.trim();
         ev.assessmentPeriod = perI.value.trim();
@@ -129,6 +143,8 @@ const ViewEvent = (() => {
         field("Event Name", nameI),
         field("Assessment Phase", phaseS,
           (DCS_TEMPLATE.PHASES.find((p) => p.id === (ev.phase || "planning")) || {}).hint),
+        field("Framework Mode", modeS,
+          (DCS_TEMPLATE.FRAMEWORK_MODES.find((m) => m.id === (ev.frameworkMode || "combined")) || {}).hint),
         field("Location", locI),
         field("Event Window", winI),
         field("Assessment Period", perI),
@@ -510,6 +526,112 @@ const ViewEvent = (() => {
   }
 
   /* ---------------------------------------------------- domain weights */
+  /* ---------------------------------------------------- assessment scope */
+  function scopeTab(ev) {
+    const mode = ev.frameworkMode || "combined";
+    const modeMeta = DCS_TEMPLATE.FRAMEWORK_MODES.find((m) => m.id === mode) || {};
+    const isCustom = mode === "custom";
+    const scores = Store.computeScores(ev);
+
+    const wrap = el("div", {});
+
+    wrap.appendChild(el("div", { class: "card" },
+      el("h3", { class: "card-title" }, "Framework Mode"),
+      el("p", { class: "card-hint" },
+        `Currently: ${modeMeta.label}. ${modeMeta.hint} Change it in the Event Profile tab.`),
+      el("div", { class: "audit-stats" },
+        el("span", { class: "audit-chip" }, el("span", { class: "audit-chip-label" }, "In scope"), String(scores.inScopeCount)),
+        el("span", { class: "audit-chip" }, el("span", { class: "audit-chip-label" }, "Out of scope"), String(scores.outOfScopeCount)),
+        el("span", { class: "audit-chip" }, el("span", { class: "audit-chip-label" }, "Framework"), modeMeta.short || mode))));
+
+    /* Custom scope note — the "why" that lands in the report */
+    if (isCustom) {
+      const noteI = textarea({ value: ev.customScopeNote || "", rows: 3,
+        placeholder: "Explain the rationale for this custom scope: which mission threads or domains this event covers, and what is deliberately out of scope. Included verbatim in the report's Assessment Scope Statement." });
+      const saveNote = el("button", { class: "btn btn-primary", onclick: () => {
+          ev.customScopeNote = noteI.value.trim(); Store.save();
+          UI.toast("Scope rationale saved.");
+        } }, "Save Rationale");
+      wrap.appendChild(el("div", { class: "card" },
+        el("h3", { class: "card-title" }, "Custom Scope Rationale"),
+        el("p", { class: "card-hint" }, "Required for Custom mode — appears in the final report's Assessment Scope Statement."),
+        field("Rationale", noteI), el("div", { class: "form-foot" }, saveNote)));
+    }
+
+    /* Bulk scope by domain */
+    const bulkCard = el("div", { class: "card" },
+      el("h3", { class: "card-title" }, "Bulk Scope by Domain"),
+      el("p", { class: "card-hint" }, "Turn a whole DCS domain off (or back on) for this assessment. In-scope items are counted toward the readiness score; out-of-scope items are hidden and never trip the critical gate."));
+
+    const domainRows = DCS_TEMPLATE.DOMAINS.map((d) => {
+      const items = ev.checklist.filter((c) => Store.templateItem(c.id).domainId === d.id);
+      const inScopeCount = items.filter((c) => (c.scope || "in_scope") === "in_scope").length;
+      const allIn = inScopeCount === items.length;
+      const allOut = inScopeCount === 0;
+      const state = allIn ? "in" : allOut ? "out" : "mixed";
+      const stateBadge = state === "in"
+        ? UI.badge(`${inScopeCount}/${items.length} in scope`, "good")
+        : state === "out"
+          ? UI.badge("all out of scope", "muted")
+          : UI.badge(`${inScopeCount}/${items.length} in scope`, "warning");
+      const btn = el("button", { class: "btn small", onclick: () => bulkSetDomainScope(ev, d, state === "out" ? "in_scope" : "out_of_scope") },
+        state === "out" ? "Include" : "Exclude");
+      return el("tr", {},
+        el("td", {}, el("strong", {}, d.code), " ", d.name,
+          el("div", { class: "cell-sub" }, d.focus)),
+        el("td", {}, stateBadge),
+        el("td", {}, btn));
+    });
+    bulkCard.appendChild(el("table", { class: "data-table compact" },
+      el("thead", {}, el("tr", {}, ["DCS Domain", "Scope Status", ""].map((h) => el("th", {}, h)))),
+      el("tbody", {}, domainRows)));
+    wrap.appendChild(bulkCard);
+
+    /* Per-item scope list — jump straight to any item to change its scope */
+    if (scores.outOfScopeCount) {
+      const outItems = ev.checklist.filter((c) => (c.scope || "in_scope") !== "in_scope"
+        || !Store.itemInFrameworkMode(c.id, mode));
+      wrap.appendChild(el("div", { class: "card" },
+        el("h3", { class: "card-title" }, `Excluded Items (${outItems.length})`),
+        el("p", { class: "card-hint" }, "Items excluded by domain, by framework mode, or individually. Click any item to review or restore it."),
+        el("ul", { class: "mini-list" }, outItems.slice(0, 40).map((c) => {
+          const t = Store.templateItem(c.id);
+          const reason = c.scope && c.scope !== "in_scope"
+            ? (c.scopeReason || "no reason recorded")
+            : `Excluded by framework mode (${modeMeta.short || mode})`;
+          return el("li", { class: "mini-row clickable", onclick: () => App.go("checklist", { open: c.id }) },
+            UI.badge(t.domainId, "muted"),
+            el("span", { class: "mini-id" }, c.id),
+            el("span", { class: "mini-title" }, t.requirement),
+            el("span", { class: "mini-meta" }, reason));
+        }))));
+    }
+
+    return wrap;
+  }
+
+  function bulkSetDomainScope(ev, domain, target) {
+    const items = ev.checklist.filter((c) => Store.templateItem(c.id).domainId === domain.id);
+    if (target === "out_of_scope") {
+      const reasonI = textarea({ rows: 2,
+        placeholder: `Why is the ${domain.name} domain out of scope for this assessment? Recorded in the report.` });
+      UI.modal(`Exclude "${domain.name}" from this assessment`, el("div", {},
+        el("p", { class: "card-hint" }, `${items.length} checklist item(s) in this domain will be excluded from scoring and the critical gate. Add a rationale for the report.`),
+        field("Reason", reasonI)), [
+        { label: "Cancel", onclick: () => {} },
+        { label: "Exclude Domain", primary: true, onclick: () => {
+            if (!reasonI.value.trim()) { UI.toast("A reason is required for scope changes.", "error"); return false; }
+            items.forEach((c) => { c.scope = "out_of_scope"; c.scopeReason = reasonI.value.trim(); });
+            Store.save(); UI.toast(`Excluded ${items.length} item(s).`);
+            App.go("event", { tab: "scope" });
+          } }]);
+    } else {
+      items.forEach((c) => { c.scope = "in_scope"; c.scopeReason = ""; });
+      Store.save(); UI.toast(`Restored ${items.length} item(s) to scope.`);
+      App.go("event", { tab: "scope" });
+    }
+  }
+
   function weightsTab(ev) {
     const inputs = {};
     const rows = DCS_TEMPLATE.DOMAINS.map((d) => {

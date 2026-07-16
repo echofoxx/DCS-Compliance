@@ -31,3 +31,16 @@ test("changed data roots map to granular permissions", () => {
   assert.equal(rbac.requiredPermissionForPath("execNarrative"), "reports.edit");
   assert.equal(rbac.requiredPermissionForPath("objectives"), "assessment.plan.edit");
 });
+
+test("framework mode + partial scope are planning edits", () => {
+  // Framework Mode selector: planning decision, gated by plan.edit.
+  assert.equal(rbac.requiredPermissionForPath("frameworkMode"), "assessment.plan.edit");
+  assert.equal(rbac.requiredPermissionForPath("customScopeNote"), "assessment.plan.edit");
+  // Per-item scope decisions are planning edits even though the checklist
+  // collection normally requires checklist.manage for scoring.
+  assert.equal(rbac.requiredPermissionForPath("checklist[DCS-01].scope"), "assessment.plan.edit");
+  assert.equal(rbac.requiredPermissionForPath("checklist[DCS-01].scopeReason"), "assessment.plan.edit");
+  // Scoring still routes through checklist.manage.
+  assert.equal(rbac.requiredPermissionForPath("checklist[DCS-01].score"), "checklist.manage");
+  assert.equal(rbac.requiredPermissionForPath("checklist[DCS-01].result"), "checklist.manage");
+});

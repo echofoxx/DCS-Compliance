@@ -173,6 +173,8 @@ h1, h2, h3, h4 { margin: 0; font-weight: 650; }
 .score-pill.score-3 { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good-text); }
 .score-pill.score-4 { background: var(--good); color: #fff; }
 
+.row-out-of-scope { opacity: 0.55; background: color-mix(in srgb, var(--baseline) 25%, transparent); }
+.row-out-of-scope td { font-style: italic; }
 .rating-chip {
   display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 999px;
   font-weight: 700; font-size: 13px; border: 1px solid var(--grid); background: var(--surface-1);

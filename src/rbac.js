@@ -43,7 +43,14 @@ const CHANGE_PERMISSIONS = {
   execNarrative: "reports.edit"
 };
 
-const PLAN_FIELDS = new Set(["name", "location", "eventWindow", "assessmentPeriod", "description", "objectives", "classification", "phase", "standards", "isSample"]);
+const PLAN_FIELDS = new Set(["name", "location", "eventWindow", "assessmentPeriod", "description", "objectives", "classification", "phase", "standards", "isSample", "frameworkMode", "customScopeNote"]);
+
+// Fields whose *sub-paths* under a top-level collection are planning-scope
+// edits (as opposed to the collection's normal write permission). For
+// example, checklist[X].scope is an assessment scope decision, not a
+// checklist.manage decision — so the Assessment Lead can shape scope even
+// while assessors do the scoring.
+const PLANNING_SUBPATHS = { checklist: new Set(["scope", "scopeReason"]) };
 
 function unique(values) { return [...new Set(values)]; }
 function systemPermissions(role) { return SYSTEM_PERMISSIONS[role] || []; }
@@ -55,7 +62,11 @@ function can(user, permission, assessmentRole) {
   return permissionsFor(user.system_role, assessmentRole).includes(permission);
 }
 function requiredPermissionForPath(path) {
-  const root = String(path || "").split(/[.[\]]/).filter(Boolean)[0];
+  const parts = String(path || "").split(/[.[\]]/).filter(Boolean);
+  const root = parts[0];
+  // Scope decisions inside otherwise-writable collections are planning edits.
+  const collectionSub = PLANNING_SUBPATHS[root];
+  if (collectionSub && parts.some((p) => collectionSub.has(p))) return "assessment.plan.edit";
   if (CHANGE_PERMISSIONS[root]) return CHANGE_PERMISSIONS[root];
   if (PLAN_FIELDS.has(root)) return "assessment.plan.edit";
   return "assessment.plan.edit";

@@ -134,8 +134,36 @@ const ViewReports = (() => {
     }
 
     if (has("method")) {
+      // Assessment Scope Statement — auto-generated from framework mode +
+      // per-item scope decisions. Groups scope reasons by domain so the
+      // report reads as a coherent explanation.
+      const modeMeta = DCS_TEMPLATE.FRAMEWORK_MODES.find((m) => m.id === (ev.frameworkMode || "combined")) || {};
+      const outByDomain = new Map();
+      ev.checklist.forEach((c) => {
+        if ((c.scope || "in_scope") === "in_scope") return;
+        const d = Store.domain(Store.templateItem(c.id).domainId);
+        if (!outByDomain.has(d.name)) outByDomain.set(d.name, []);
+        outByDomain.get(d.name).push({ id: c.id, reason: c.scopeReason || "no reason recorded" });
+      });
+      const scopeRows = [...outByDomain.entries()].map(([dName, list]) => {
+        const reasons = [...new Set(list.map((x) => x.reason))].join("; ");
+        return `<tr><td>${esc(dName)}</td><td>${list.length}</td><td>${list.map((x) => x.id).join(", ")}</td><td>${esc(reasons)}</td></tr>`;
+      }).join("");
+      const modeExcluded = ev.checklist.filter((c) => (c.scope || "in_scope") === "in_scope"
+        && !Store.itemInFrameworkMode(c.id, ev.frameworkMode)).length;
+
       h.push(`<section><h2>3. Assessment Methodology</h2>
-        <p>Items were scored with a 0–4 maturity rubric and a Pass / Partial / Fail / Not-Observed / N/A result. A checklist item is not marked complete unless the assessor can point to objective evidence (log entry, policy decision, enforcement result, screenshot, export, or signed observation note). The overall readiness score blends domain averages using the compliance weights below; any failed critical item or open critical finding caps the overall rating regardless of the weighted score.</p>
+        <h3>Assessment Scope</h3>
+        <table class="rpt-kv">
+          <tr><th>Framework Mode</th><td><strong>${esc(modeMeta.label || ev.frameworkMode)}</strong> — ${esc(modeMeta.hint || "")}</td></tr>
+          <tr><th>Items in scope</th><td>${s.inScopeCount} of ${ev.checklist.length}</td></tr>
+          <tr><th>Items out of scope</th><td>${s.outOfScopeCount}${modeExcluded ? ` (${modeExcluded} excluded by framework mode; the rest by explicit scope decision)` : ""}</td></tr>
+          ${ev.frameworkMode === "custom" && ev.customScopeNote ? `<tr><th>Custom scope rationale</th><td>${esc(ev.customScopeNote)}</td></tr>` : ""}
+        </table>
+        ${scopeRows ? `<h4>Excluded items by domain</h4>
+          <table class="rpt-table"><tr><th>Domain</th><th># Excluded</th><th>Item IDs</th><th>Reason(s)</th></tr>${scopeRows}</table>` : ""}
+        <h3>Scoring Approach</h3>
+        <p>Items were scored with a 0–4 maturity rubric and a Pass / Partial / Fail / Not-Observed / N/A result. A checklist item is not marked complete unless the assessor can point to objective evidence (log entry, policy decision, enforcement result, screenshot, export, or signed observation note). The overall readiness score blends domain averages using the compliance weights, over in-scope items only; any failed critical in-scope item or open critical finding caps the overall rating regardless of the weighted score. Out-of-scope items are excluded from every calculation.</p>
         <table class="rpt-table"><tr><th>Score</th><th>Meaning</th></tr>
         ${DCS_TEMPLATE.SCORE_RUBRIC.map((r) => `<tr><td>${r.score} — ${esc(r.label)}</td><td>${esc(r.meaning)}</td></tr>`).join("")}</table>
       </section>`);
@@ -150,8 +178,11 @@ const ViewReports = (() => {
     }
 
     if (has("checklist")) {
+      // In-scope items only; a summary line names how many were excluded.
       const rows = DCS_TEMPLATE.DOMAINS.map((d) => {
-        const items = ev.checklist.filter((c) => Store.templateItem(c.id).domainId === d.id);
+        const items = ev.checklist.filter((c) =>
+          Store.templateItem(c.id).domainId === d.id && Store.isInScope(ev, c));
+        if (!items.length) return "";
         return `<tr class="rpt-domain"><td colspan="6">${esc(d.code)} ${esc(d.name)}</td></tr>` +
           items.map((c) => {
             const t = Store.templateItem(c.id);
@@ -159,6 +190,7 @@ const ViewReports = (() => {
           }).join("");
       }).join("");
       h.push(`<section><h2>5. Detailed Checklist Results</h2>
+        <p><em>${s.inScopeCount} in-scope items shown.${s.outOfScopeCount ? ` ${s.outOfScopeCount} item(s) are out of scope for this assessment — see Section 3 Assessment Scope for reasons.` : ""}</em></p>
         <table class="rpt-table"><tr><th>ID</th><th>Compliance Check</th><th>Score</th><th>Result</th><th>Evidence</th><th>Assessor Notes</th></tr>${rows}</table>
       </section>`);
     }
