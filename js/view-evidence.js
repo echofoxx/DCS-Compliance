@@ -151,6 +151,138 @@ const ViewEvidence = (() => {
     fi.click();
   }
 
+  /* ============================================================ SPIF UI */
+  // Validates a STANAG 4774 SPIF against the assessment's registered
+  // protected data objects; optionally verifies a STANAG 4778 binding sample
+  // using a policy public key pasted in per-request (never persisted).
+  function openSpifValidator(ev) {
+    const xmlI = el("textarea", { class: "input", rows: 12,
+      placeholder: "<SPIF xmlns=\"urn:nato:stanag:4774:...\">\n  <PolicyIdentifier Name=\"Coalition-2027\"/>\n  <SecurityClassifications>\n    <SecurityClassification Name=\"UNCLASSIFIED\"/>\n    <SecurityClassification Name=\"SECRET\"/>\n  </SecurityClassifications>\n</SPIF>" });
+    const resultRoot = el("div", {});
+
+    const runBtn = el("button", { class: "btn btn-primary", onclick: async () => {
+        const xml = xmlI.value.trim();
+        if (!xml) { UI.toast("Paste a SPIF XML to validate.", "error"); return; }
+        runBtn.disabled = true; runBtn.textContent = "Validating…";
+        try {
+          const out = await Auth.request(`/api/assessments/${ev.id}/spif/validate`, {
+            method: "POST", body: JSON.stringify({ xml })
+          });
+          renderSpifResult(resultRoot, out, ev);
+          const failed = out.rules.filter((r) => !r.ok && r.severity === "critical").length;
+          UI.toast(failed ? `Validation complete — ${failed} critical structural issue(s).` : "SPIF parsed and validated.");
+        } catch (err) {
+          UI.toast(`Validation failed: ${err.message}`, "error");
+          resultRoot.innerHTML = "";
+          resultRoot.appendChild(el("div", { class: "gate-note" }, err.message));
+        } finally {
+          runBtn.disabled = false; runBtn.textContent = "Validate SPIF";
+        }
+      } }, "Validate SPIF");
+
+    const verifyBtn = el("button", { class: "btn", onclick: () => openBindingVerifier(ev) }, "Verify STANAG 4778 Binding…");
+
+    UI.modal("SPIF Validation — STANAG 4774", el("div", {},
+      el("p", { class: "card-hint" },
+        "Paste a STANAG 4774 SPIF policy (XML). The server parses it structurally, extracts allowed classifications, releasability tokens and categories, and cross-checks every registered protected data object against the policy. Nothing you paste here is stored server-side except the audit record of the validation run."),
+      UI.field("SPIF XML", xmlI, "STANAG 4774 profile. Max 2 MB. DOCTYPE is rejected."),
+      el("div", { class: "ai-row" }, runBtn, verifyBtn,
+        el("span", { class: "field-hint" }, "The verify option opens a separate STANAG 4778 signature check that uses a per-request public key.")),
+      resultRoot), []);
+  }
+
+  function renderSpifResult(root, out, ev) {
+    root.innerHTML = "";
+    const p = out.policy || {};
+    root.appendChild(el("h4", { class: "drawer-h" }, "Policy Summary"));
+    root.appendChild(el("dl", { class: "detail-list" },
+      el("dt", {}, "Policy ID"), el("dd", {}, p.id || "—"),
+      el("dt", {}, "Namespace"), el("dd", {}, p.namespace || "—"),
+      el("dt", {}, "Classifications"), el("dd", {}, (p.classifications || []).map((c) => UI.badge(c, "info")).length
+        ? el("div", { class: "chip-row" }, (p.classifications || []).map((c) => UI.badge(c, "info"))) : "—"),
+      el("dt", {}, "Releasability tokens"), el("dd", {}, (p.releasability || []).length
+        ? el("div", { class: "chip-row" }, p.releasability.map((r) => UI.badge(r, "info"))) : "—"),
+      el("dt", {}, "Categories"), el("dd", {}, (p.categories || []).length
+        ? el("ul", { class: "plain-list" }, p.categories.map((c) =>
+            el("li", {}, `${c.name}: ${(c.values || []).join(", ") || "—"}`))) : "—")));
+
+    root.appendChild(el("h4", { class: "drawer-h" }, "Structural Rules"));
+    root.appendChild(el("table", { class: "data-table compact" },
+      el("thead", {}, el("tr", {}, ["Rule", "Result", "Message"].map((h) => el("th", {}, h)))),
+      el("tbody", {}, out.rules.map((r) =>
+        el("tr", {},
+          el("td", {}, r.id),
+          el("td", {}, UI.badge(r.ok ? "PASS" : r.severity.toUpperCase(),
+            r.ok ? "good" : r.severity === "critical" ? "critical" : r.severity === "warn" ? "warning" : "info")),
+          el("td", {}, r.message))))));
+
+    root.appendChild(el("h4", { class: "drawer-h" }, `Asset Coverage (${(out.assetFindings || []).length})`));
+    if (!(out.assetFindings || []).length) {
+      root.appendChild(el("p", { class: "empty-mini" }, "No protected data objects registered — nothing to cross-check."));
+    } else {
+      root.appendChild(el("table", { class: "data-table compact" },
+        el("thead", {}, el("tr", {}, ["Asset", "Classification", "Releasability", "Result", "Message"].map((h) => el("th", {}, h)))),
+        el("tbody", {}, out.assetFindings.map((f) =>
+          el("tr", {},
+            el("td", {}, f.name),
+            el("td", {}, f.classification || "—"),
+            el("td", {}, f.releasability || "—"),
+            el("td", {}, UI.badge(f.status.toUpperCase(), f.status === "pass" ? "good" : f.status === "warn" ? "warning" : "critical")),
+            el("td", {}, f.message))))));
+    }
+
+    root.appendChild(el("p", { class: "card-hint" },
+      "This validation supports DCS-56, DCS-64, and (with binding verification) DCS-57. Attach the results to those checklist items as evidence via +New Evidence → paste the outcome."));
+  }
+
+  function openBindingVerifier(ev) {
+    const labelI = el("textarea", { class: "input", rows: 4,
+      placeholder: "The exact bytes that were signed — typically the STANAG 4774 label XML fragment. Whitespace matters." });
+    const sigI = el("textarea", { class: "input", rows: 2, placeholder: "Base64-encoded signature bytes" });
+    const algS = UI.select([
+      "RSA-SHA256", "RSA-SHA384", "RSA-SHA512",
+      "RSA-PSS-SHA256", "RSA-PSS-SHA384", "RSA-PSS-SHA512",
+      "ECDSA-SHA256", "ECDSA-SHA384", "ECDSA-SHA512"
+    ], "ECDSA-SHA256");
+    const keyI = el("textarea", { class: "input", rows: 4,
+      placeholder: "-----BEGIN PUBLIC KEY-----\n... (PEM) ...\n-----END PUBLIC KEY-----" });
+    const resultRoot = el("div", {});
+
+    const goBtn = el("button", { class: "btn btn-primary", onclick: async () => {
+        goBtn.disabled = true; goBtn.textContent = "Verifying…";
+        try {
+          const out = await Auth.request(`/api/assessments/${ev.id}/spif/verify-binding`, {
+            method: "POST",
+            body: JSON.stringify({
+              labelXml: labelI.value, signatureBase64: sigI.value.trim(),
+              algorithm: algS.value, publicKeyPem: keyI.value
+            })
+          });
+          resultRoot.innerHTML = "";
+          resultRoot.appendChild(el("div", { class: out.valid ? "gate-note ok" : "gate-note" },
+            el("strong", {}, out.valid ? "✓ Signature verifies" : "✗ Signature does NOT verify"),
+            el("br", {}), out.message,
+            el("div", { class: "field-hint" }, `Algorithm ${out.algorithm}, digest ${out.hash}. Label SHA hex: ${out.labelDigestHex.slice(0, 32)}…`)));
+        } catch (err) {
+          resultRoot.innerHTML = "";
+          resultRoot.appendChild(el("div", { class: "gate-note" }, err.message));
+        } finally {
+          goBtn.disabled = false; goBtn.textContent = "Verify Binding";
+        }
+      } }, "Verify Binding");
+
+    UI.modal("STANAG 4778 Binding Verification", el("div", {},
+      el("p", { class: "card-hint" },
+        "Verify that a supplied signature over label bytes verifies with the policy public key. Public keys are used per-request and not stored."),
+      UI.field("Label bytes (the signed content)", labelI),
+      UI.field("Signature (base64)", sigI),
+      el("div", { class: "form-grid" },
+        UI.field("Algorithm", algS),
+        UI.field("Public key (PEM)", keyI)),
+      el("div", { class: "ai-row" }, goBtn),
+      resultRoot), []);
+  }
+
   function logTemplate() {
     Store.download("dcs-decision-log-template.csv",
       "timestamp,user,asset,action,decision,expected,reason,pep_result,latency_ms\r\n" +
@@ -174,6 +306,7 @@ const ViewEvidence = (() => {
       el("div", { class: "view-actions" },
         el("button", { class: "btn", title: "Column reference for decision-log exports", onclick: logTemplate }, "Log Template"),
         el("button", { class: "btn", title: "Import a PDP/PEP/SIEM decision log export (CSV, JSON, or NDJSON)", onclick: () => ingestLog(ev) }, "⇪ Ingest Decision Log"),
+        el("button", { class: "btn", title: "Validate a STANAG 4774 SPIF policy and cross-check registered assets", onclick: () => openSpifValidator(ev) }, "⌂ Validate SPIF"),
         el("button", { class: "btn", onclick: () => Store.exportEvidenceCSV(ev) }, "Export Evidence Index"),
         el("button", { class: "btn btn-primary", onclick: () => editEvidence(ev, null) }, "+ Add Evidence"))));
 
