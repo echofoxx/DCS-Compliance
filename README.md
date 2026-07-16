@@ -1,21 +1,43 @@
-# DCS Assessment Command Center
+# DCS Assessment Command Center v2.0
 
-A **web application for planning, executing, scoring, and reporting Data-Centric
-Security (DCS) compliance assessments** during operational events — Docker-hosted
-for team use, or standalone in a single browser when there is no server.
+A **database-backed, multi-user web application for planning, executing,
+scoring, reviewing, and reporting Data-Centric Security (DCS) compliance
+assessments** during operational events.
 
-It is an assessment command center, not a basic checklist. Every screen is built
-around one question:
+v2.0 keeps the entire v1 assessment workbench — 55 DCS compliance checks
+across 10 domains, mission threads, protected data objects, test cards,
+evidence, findings, reports, and cross-event program trends — and adds
+**named user accounts, thirteen assessment-specific roles, formal review and
+approval decisions, a cryptographically chained audit trail, and a
+PostgreSQL-backed multi-user Docker deployment.**
 
-> **Did the event prove that protected data can be discovered, labeled, governed,
-> accessed, denied, shared, monitored, and audited under Zero Trust conditions?**
-
-The assessment content follows the *DCS Assessment Framework* white paper:
-**55 compliance checks (DCS-01 … DCS-55) across 10 DCS domains**, a 0–4 maturity
-rubric, a findings severity model with red-flag gating, a test-card evidence
-schema, and the 30/60/90/180-day reporting roadmap.
+> Core assessment question:
+> **Did the event prove that protected data can be discovered, labeled,
+> governed, accessed, denied, shared, monitored, and audited under Zero Trust
+> conditions?**
 
 ![Executive Dashboard](docs/screenshots/01-dashboard.png)
+
+---
+
+## What's new in v2.0
+
+| Area | v1.0 (still downloadable) | v2.0 (this branch) |
+|---|---|---|
+| **Users** | Anonymous, single shared workspace | Named accounts, bcrypt password hashing, forced first-login password change, session revocation |
+| **Access control** | None (anyone on the URL had full edit) | 3 system access levels × 13 assessment-specific roles, enforced server-side per-field |
+| **Persistence** | Single JSON file on a Docker volume | PostgreSQL with a JSONB assessment state, revision counter, deletion soft-delete, and referential integrity |
+| **Concurrency** | Revision-based conflict detection | Same, plus per-field permission checks; a stale save can never silently overwrite another user's work |
+| **Attribution** | None | Every checklist item, test card, evidence record, finding, mission thread, asset, participant, system, and daily log tracks who created it, who last updated it, and when |
+| **Audit** | None | Append-only, **cryptographically chained** audit log — each entry's hash links back to the previous entry, so tampering with history is detectable |
+| **Approvals** | None | Formal Submit → Changes Requested / Approved / Reopened decisions with decision authors, comments, and timestamps |
+| **Security posture** | Optional HTTP Basic Auth | Session cookies with CSRF tokens, HttpOnly + SameSite, login rate limiting, lockout after repeated failures, `helmet` HTTP hardening, non-root container, internal-only DB network |
+| **Backup / restore** | JSON download from the UI | UI-driven **and** `scripts/backup.sh` / `scripts/restore.sh` calling `pg_dump` / `pg_restore` against the running database |
+| **Test suite** | None | `node --test` covers RBAC and audit-chain invariants |
+
+Everything from v1 still applies to v2: 55-item DCS checklist library, critical
+gate, decision-log ingestion with false-allow detection, optional local AI
+drafting, CSV imports, print-ready Report Builder, cross-event Program view.
 
 ---
 
@@ -24,18 +46,22 @@ schema, and the 30/60/90/180-day reporting roadmap.
 1. [At a glance](#at-a-glance)
 2. [Screenshots](#screenshots)
 3. [Quick start](#quick-start)
-4. [User guide — running an assessment end to end](#user-guide--running-an-assessment-end-to-end)
-5. [Module reference](#module-reference)
-6. [Scoring engine and the critical gate](#scoring-engine-and-the-critical-gate)
-7. [Running a program of assessments](#running-a-program-of-assessments)
-8. [Docker deployment and configuration](#docker-deployment-and-configuration)
-9. [Data model and integrations](#data-model-and-integrations)
-10. [Optional local AI drafting](#optional-local-ai-drafting)
-11. [Data safety and backup](#data-safety-and-backup)
-12. [Roadmap](#roadmap)
-13. [Standards references](#standards-references)
-14. [Repository layout](#repository-layout)
-15. [Development](#development)
+4. [User accounts and roles](#user-accounts-and-roles)
+5. [User guide — running an assessment end to end](#user-guide--running-an-assessment-end-to-end)
+6. [Approvals and formal review](#approvals-and-formal-review)
+7. [Audit trail and attribution](#audit-trail-and-attribution)
+8. [Module reference](#module-reference)
+9. [Scoring engine and the critical gate](#scoring-engine-and-the-critical-gate)
+10. [Running a program of assessments](#running-a-program-of-assessments)
+11. [Docker deployment and configuration](#docker-deployment-and-configuration)
+12. [Backup and restore](#backup-and-restore)
+13. [Data model and integrations](#data-model-and-integrations)
+14. [Optional local AI drafting](#optional-local-ai-drafting)
+15. [Downloading v1.0](#downloading-v10)
+16. [Roadmap](#roadmap)
+17. [Standards references](#standards-references)
+18. [Repository layout](#repository-layout)
+19. [Development](#development)
 
 ---
 
@@ -43,45 +69,57 @@ schema, and the 30/60/90/180-day reporting roadmap.
 
 | Capability | What it does |
 |---|---|
-| Full-lifecycle workbench | Planning → Assessment Design → On-Site Execution → Analysis & Reporting, tracked as an explicit event **phase** |
+| Full assessment lifecycle | Scope & Planning → Assessment Design → On-Site Execution → Analysis & Reporting, tracked as an explicit event **phase** |
+| Framework Mode | Per-assessment selector — **NATO Only / US Only / Combined / Custom** — drives which checklist items are in scope for this event |
+| Partial Scope | Assess a subset of the checklist per assessment: bulk-exclude whole domains (with a required rationale) or set scope per item; the readiness score and critical gate honor scope |
 | 55-item DCS compliance checklist | All white-paper items across 10 domains, each with an assessment question, expected evidence, severity-if-failed, and NIST 800-53 / DoD ZT / CISA / NSA standards mappings |
-| Scenario test cards | Expected vs. actual DCS outcome (allow / deny / redact / mask / quarantine), PDP/PEP results, latency, one-click "convert failure to finding" |
+| Scenario test cards | Expected vs. actual DCS outcome, PDP/PEP results, latency, one-click "convert failure to finding" |
 | Evidence Locker with chain of custody | Typed records with source, captured-by, timestamp, classification, quality grade, and file attachments |
 | Decision-log ingestion | Import PDP/PEP/SIEM exports (CSV, JSON, NDJSON) with an audit reconstruction timeline and automatic false-allow / false-deny detection |
 | Findings with full traceability | Mission Thread → Checklist Item → Test Card → Evidence → Finding, clickable at every step |
 | Report Builder | Print-ready final assessment report (11 sections) plus CSV / JSON exports |
 | Program view | Cross-event maturity trend, domain × event matrix with first→latest deltas, program-wide open critical gaps, reusable strength patterns |
-| Bulk import | CSV templates for participants and protected data objects |
-| Optional local AI drafting | Draft finding impact/recommendation and the executive narrative via a locally hosted model (Ollama) — draft-only guardrail |
-| Docker-hosted, shared team workspace | Zero-dependency Node server, revision-based conflict detection, offline-tolerant, persistent Docker volume; standalone browser mode still works |
-| Runs offline / on-site | Local-first design, no external network dependencies, works in restricted environments |
+| **Multi-user platform (new)** | Named user accounts, session cookies with CSRF, login throttling and lockout, forced first-login password change |
+| **13 assessment roles + 3 system roles (new)** | Server-side permission checks per field; a role that isn't allowed to edit findings can't edit findings via any code path |
+| **Attribution on every record (new)** | Who created it, who last touched it, and when — displayed in every drawer |
+| **Cryptographically chained audit (new)** | Every state change is logged; each entry hash-links to the previous entry so history is tamper-evident |
+| **Formal submit / approve / reopen (new)** | Assessment Leads submit for review; Independent Reviewers or Approving Officials record explicit decisions |
+| Optional local AI drafting | Draft finding impact / recommendation and the executive narrative via a locally hosted model (Ollama) — draft-only guardrail |
 
 ---
 
 ## Screenshots
 
-Executive Dashboard — readiness gauge, weighted domain heatmap, evidence-gap
-tracker, and mission-thread status; every card drills into the underlying items.
+The assessment workbench UI is unchanged from v1 — the same 12 screens (which
+are what most of the team spends time in) are documented here. v2 adds three
+authenticated shell screens on top: **Sign In**, **Administration & Team**,
+and **Activity & Approvals**.
+
+Executive Dashboard — readiness gauge with the critical gate, weighted domain
+heatmap, evidence-gap tracker, mission-thread readiness, and stat tiles that
+drill through everywhere.
 
 ![Executive Dashboard](docs/screenshots/01-dashboard.png)
 
 Event Workspace — event profile with the assessment phase selector, plus the
 event readiness meter (planning inputs) that appears above every tab.
 
-![Event Workspace — profile](docs/screenshots/02-event-workspace.png)
+![Event Workspace](docs/screenshots/02-event-workspace.png)
 
 Mission threads tie every checklist item and test card to an operational
-outcome. Editable in place; each thread shows its linked tests and findings.
+outcome.
 
 ![Mission threads](docs/screenshots/03-mission-threads.png)
 
-DCS Checklist — all 55 items grouped by domain, filterable by domain, result,
+DCS Checklist — 55 items grouped by domain, filterable by domain, result,
 workflow, severity, missing evidence, owner, and mission thread.
 
 ![Checklist](docs/screenshots/04-checklist.png)
 
 Drill into any item to see the requirement, assessment question, expected
-evidence, standards mapping, and score / result / evidence links.
+evidence, standards mapping, and score / result / evidence links. In v2 the
+drawer also shows **created by / last updated by / at**, and disables editing
+controls when the signed-in user's role doesn't permit that edit.
 
 ![Checklist drawer](docs/screenshots/05-checklist-drawer.png)
 
@@ -91,18 +129,18 @@ hotwash notes, and one-click conversion of failures into findings.
 ![Test Cards](docs/screenshots/06-testcards.png)
 
 Evidence Locker — typed evidence with chain-of-custody metadata, quality grade,
-optional file attachments, and links back to checks, tests, and findings.
+optional file attachments, and decision-log ingestion with the audit
+reconstruction timeline.
 
 ![Evidence Locker](docs/screenshots/07-evidence-locker.png)
 
-Findings — severity model (Critical / Major / Moderate / Observation /
-Strength), remediation status, and full end-to-end traceability.
+Findings — severity, remediation status, and clickable end-to-end
+traceability.
 
 ![Findings](docs/screenshots/08-findings.png)
 
 Every finding's traceability chain: Mission Thread → Checklist Item → Test Card
-→ Evidence. Each step is clickable — it is the defensible path from operational
-need to the finding.
+→ Evidence.
 
 ![Finding traceability](docs/screenshots/09-finding-traceability.png)
 
@@ -111,160 +149,255 @@ or JSON for the appendix package.
 
 ![Report Builder](docs/screenshots/10-report.png)
 
-Program view — the cross-event picture for an assessment series: readiness
-trend, domain × event maturity with first→latest deltas, and the reusable
-strengths library.
+Program view — cross-event picture for an assessment series: readiness trend,
+domain × event maturity with first→latest deltas, and the reusable-strengths
+library.
 
 ![Program view](docs/screenshots/11-program.png)
 
-Getting Started card — appears on the dashboard of a fresh event and disappears
-on its own once planning is complete and scoring begins.
+Getting Started card — appears on the dashboard of a fresh event and
+disappears on its own once planning is complete and scoring begins.
 
 ![Getting Started](docs/screenshots/12-getting-started.png)
+
+Assessment Scope — pick a Framework Mode (NATO Only / US Only / Combined /
+Custom) and shape the in-scope subset of the checklist per domain. Out-of-scope
+items are excluded from the readiness score, evidence completeness, and the
+critical gate, and the report auto-generates a Scope Statement explaining why.
+
+![Assessment Scope](docs/screenshots/13-assessment-scope.png)
 
 ---
 
 ## Quick start
 
-### Docker (recommended for the team)
+v2.0 is a Postgres-backed multi-user application. Docker Compose brings both
+the app container and the database up together.
+
+### 1. Prepare your environment
 
 ```bash
-docker compose up -d      # → http://<host>:8080
+cp .env.example .env
+# open .env and set unique values for at minimum:
+#   POSTGRES_PASSWORD
+#   ADMIN_USERNAME
+#   ADMIN_PASSWORD
 ```
 
-Or without compose:
+### 2. Bring the stack up
 
 ```bash
-docker build -t dcs-command-center .
-docker run -d --name dcs-command-center \
-  -p 8080:8080 \
-  -v dcs-data:/data \
-  dcs-command-center
+docker compose up -d
+# → http://<host>:8080
 ```
 
-In Docker mode, the whole assessment team browses to one URL and works from a
-**single server-persisted workspace** that lives on the mounted `dcs-data`
-volume and survives container restarts. The sidebar footer confirms the mode:
-*"Server-synced · shared team workspace."*
+### 3. Sign in as the bootstrap admin
 
-### Standalone (no server, single browser)
+- Username: whatever you set in `ADMIN_USERNAME`
+- Password: whatever you set in `ADMIN_PASSWORD`
 
-The same files also run without a backend:
+**The UI forces a password change on first sign-in.** Change the password,
+then go to *Administration & Team* to create the rest of the users and assign
+their system roles. Assessment-specific roles are assigned per assessment once
+you create one (or invite users into the seeded sample assessment).
 
-```bash
-python3 -m http.server 8080
-# open http://localhost:8080
-```
+### 4. (Optional) seed the sample assessment
 
-…or simply open `index.html` directly. In standalone mode data lives in the
-browser's `localStorage` (per-browser, per-machine); the sidebar footer shows
-*"Local-first · data stays in this browser."* Use **⬇ Backup Workspace** and
-**Events ▾ → Import JSON** to move data between machines.
+`SEED_SAMPLE_DATA=true` in `.env` (the default) auto-creates the DCS/ZT
+Operational Demonstration sample assessment on first boot so every screen has
+data. Set to `false` for a clean production deployment.
 
-A pre-populated **sample event** loads on first run so every screen has data.
-Delete it from **Events ▾ → Delete Event** once you create your own.
+---
+
+## User accounts and roles
+
+Access is enforced at two layers: the **system role** on the user record, and
+the **assessment role** granted per assessment. Effective permissions are the
+union of the two.
+
+### System roles
+
+| Role | Purpose |
+|---|---|
+| **System Administrator** | Full platform authority: manages user accounts, system roles, backups, and the audit trail. Not intended to score assessment items directly. |
+| **Program Manager** | Owns the program of assessments: can create new assessments and view reports across the portfolio. Assessment-level rights are still granted by the assessment role. |
+| **Standard User** | Base account. Sees only the assessments they are staffed on, with rights determined entirely by their assessment role. |
+
+### Assessment roles (13)
+
+Assigned per assessment in *Administration & Team → Assessment Team*.
+
+| Role | Responsibility |
+|---|---|
+| **Assessment Program Manager** | Owns the program's event portfolio, staffing, approvals, and delivery |
+| **Assessment Lead** | Leads one assessment from scope through final report and manages the assessment team |
+| **Lead Assessor** | Coordinates assessors, scoring, evidence sufficiency, findings, and report development |
+| **DCS Control Assessor** | Executes DCS checklist checks, test cards, evidence capture, scoring, and drafts findings |
+| **Security / Zero Trust Assessor** | Assesses policy decision, enforcement, identity, device, network, and monitoring behavior |
+| **Test Director** | Plans and controls test execution, expected outcomes, instrumentation, and hotwash records |
+| **Evidence Custodian** | Maintains evidence intake, provenance, quality, classification, and chain of custody |
+| **Data Steward / Data Product Owner** | Defines protected data objects, metadata, labels, sharing rules, and supporting evidence |
+| **Technical SME / System Integrator** | Provides system context, supports tests, submits evidence, and responds to findings |
+| **Mission Owner / Operational Representative** | Defines mission threads, validates mission impact, and reviews results |
+| **Event Coordinator / Site Lead** | Maintains event logistics, participants, systems, schedules, and daily activity records |
+| **Independent Reviewer / Approving Official** | Reviews evidence and findings, records approval decisions, and views the audit trail |
+| **Observer / Read Only** | Can view assigned assessments and reports without changing records |
+
+### Permission model
+
+Roles resolve to a set of **permission tokens** enforced server-side. The
+important ones:
+
+| Permission | Grants |
+|---|---|
+| `assessment.view` | Read the assessment state |
+| `assessment.create` | Create new assessments |
+| `assessment.delete` | Delete assessments |
+| `assessment.plan.edit` | Edit scope: profile, phase, threads, assets, participants, systems, weights, daily logs |
+| `assessment.team.manage` | Add / remove team members and change their assessment roles |
+| `checklist.manage` | Score checklist items and change their results / workflow |
+| `test.manage` | Create, edit, and record outcomes for test cards |
+| `evidence.manage` | Add, edit, or delete evidence records (including decision-log ingests) |
+| `findings.manage` | Create, edit, or delete findings |
+| `reports.view` | View report output |
+| `reports.edit` | Edit the executive narrative and report configuration |
+| `assessment.review` | Record a Changes-Requested review decision |
+| `assessment.approve` | Approve or Reopen the assessment |
+| `audit.view` | View the tamper-evident audit trail |
+| `users.manage` | Create and manage user accounts (system admin only) |
+
+The server maps **JSON paths inside the assessment state → permission tokens**
+so, for example, editing anything under `state.findings` requires
+`findings.manage` no matter which UI path the request came from. Attempts to
+edit a field without the required permission are rejected with `403` before
+the state ever changes; the audit chain records the denied attempt.
 
 ---
 
 ## User guide — running an assessment end to end
 
 The app is organized around the assessment phases from the DCS Framework white
-paper. The **assessment phase** on each event (top-bar chip, editable in Event
-Workspace → Event Profile) tells the team where the event stands.
+paper. The **assessment phase** on each event (top-bar chip, editable in
+Event Workspace → Event Profile) tells the team where the event stands.
 
-### Phase 1 — Scope & Planning (July–August)
+### Phase 1 — Scope & Planning
 
 **Goal:** define what will be assessed and what "success" looks like before
 anyone touches a control.
 
-1. **Create the event** — *Events ▾ → + New Event*. Give it a name, location,
-   event window, and classification. A fresh, unscored copy of the 55-item
-   checklist template comes with it.
-2. **Event Profile** (Event Workspace → Event Profile) — record the objectives,
-   participating organizations, assessment period, and standards alignment.
-   Set the **Assessment Phase** to *Scope & Planning*.
-3. **Mission Threads** — add each operational scenario the DCS capability must
-   support. Example: *"Coalition operational data sharing — partner sees
-   authorized information only."* Every checklist item and test card gets tied
-   back to one of these threads.
-4. **Protected Data Objects** — register the datasets, APIs, feeds, files, and
-   data products that the assessment will exercise. Record classification,
-   releasability, caveats, required protections, and risk rating. Use *CSV
-   Template → Import CSV* for bulk loading from a spreadsheet.
-5. **Participants & Systems** — record the assessors, stewards, SMEs, and the
-   systems in scope (PDPs, PEPs, gateways, data platforms, telemetry).
-   Participants also accept CSV import.
-6. **Compliance Weights** — accept the defaults (labeling, policy, enforcement,
-   audit weighted heaviest) or adjust to match your event's emphasis. Weights
-   must total 100 %.
+1. **Create the event** — *Events ▾ → + New Event* (requires `assessment.create`).
+2. **Staff the team** — *Administration & Team → Assessment Team* (requires
+   `assessment.team.manage`). Assign an Assessment Lead, a Lead Assessor, DCS
+   Control Assessors, an Evidence Custodian, a Test Director, and Mission
+   Owners at minimum.
+3. **Event Profile** — record objectives, participating organizations,
+   assessment period, and standards alignment. Set **Assessment Phase** to
+   *Scope & Planning* and pick the **Framework Mode**:
+   - *Combined (US + NATO)* — default; all framework-tagged items are in scope
+   - *US Only* — only items with a US framework reference
+   - *NATO Only* — only items with a NATO framework reference
+   - *Custom* — Assessment Lead picks the exact item set; requires a scope
+     rationale that appears in the final report
+4. **Assessment Scope** *(new tab)* — bulk-exclude any DCS domain that this
+   event does not exercise (e.g., turn off Domain 5.7 Sharing & Partner
+   Controls when partner sharing is not being tested), with a required "why"
+   note that appears in the report's Scope Statement. Per-item scope
+   overrides are set from the checklist drill-in drawer.
+5. **Mission Threads** — add each operational scenario the DCS capability must
+   support. Every checklist item and test card gets tied back to one of these.
+6. **Protected Data Objects** — register the datasets, APIs, feeds, files, and
+   data products that the assessment will exercise. Use *CSV Template →
+   Import CSV* for bulk loading.
+7. **Participants & Systems** — record the systems in scope (PDPs, PEPs,
+   gateways, data platforms, telemetry). Participants also accept CSV import.
+8. **Compliance Weights** — accept the defaults or adjust.
 
-**Check:** the **Event Readiness Meter** at the top of Event Workspace tracks
-these 8 planning inputs. The Dashboard shows a **Getting Started** card with
-one-click next-step buttons until planning is complete.
+The **framework chip** in the top bar and the checklist header always show the
+active mode and in-scope count, so the whole team stays aligned on what is
+actually being assessed.
 
-### Phase 2 — Assessment Design (August–September)
+**Check:** the **Event Readiness Meter** tracks 8 planning inputs. The
+Dashboard shows a **Getting Started** card until planning is complete.
 
-**Goal:** turn scope into a repeatable execution plan with expected outcomes.
+### Phase 2 — Assessment Design
 
-1. **Assign checklist items** — Checklist → *Bulk Assign* to distribute domains
-   to assessors, or open individual items to set the owner. Filter by
-   *"Any owner"* to see what is still unassigned.
-2. **Link checklist items to mission threads** — inside each item's drawer,
-   tick the threads it supports. This is what makes the final findings trace
-   back to mission impact.
-3. **Build test cards** — Test Cards → *+ From Scenario Library* pulls proven
-   patterns (denial test, label persistence through a gateway, bypass attempt,
-   bulk export, revocation, audit reconstruction, fails-closed on bad labels,
-   degraded comms). Each library card arrives pre-linked to the checklist
-   items it proves. Fill in the scenario detail: requestor, requestor
-   attributes, protected data object, expected outcome.
+1. **Assign checklist items** — Checklist → *Bulk Assign* to distribute
+   domains across assessors (requires `assessment.plan.edit`).
+2. **Link checklist items to mission threads** — inside each item's drawer.
+3. **Build test cards** — *+ From Scenario Library* pulls proven patterns;
+   each library card arrives pre-linked to the checklist items it proves.
 4. **Move the phase to *Assessment Design***.
 
-### Phase 3 — On-Site Execution (October)
+### Phase 3 — On-Site Execution
 
-**Goal:** observe controls in operation and collect defensible evidence.
+1. **Ingest decision logs** — Evidence Locker → *⇪ Ingest Decision Log* pulls
+   PDP/PEP/SIEM exports directly into evidence, with false allows flagged
+   loudly.
+2. **Run test cards** — record the actual outcome, PDP / PEP results, latency,
+   and hotwash notes. If a test fails, use *Convert Failure to Finding*.
+3. **Score checklist items** — set the 0–4 maturity score and attach the
+   evidence that supports it. **The Evidence Gap Tracker flags scored items
+   with no evidence** — those scores cannot be defended.
+4. **Daily rollups / hotwash** — Event Workspace → Daily Log captures
+   Issues → Decisions → Actions.
+5. **Watch the critical gate** — the readiness chip turns red the moment a
+   critical item fails or a critical finding is open.
 
-1. **Set the phase to *On-Site Execution***.
-2. **Ingest decision logs** — Evidence Locker → *⇪ Ingest Decision Log* pulls
-   PDP/PEP/SIEM exports (CSV, JSON array, or NDJSON) directly into evidence
-   with auto-summary stats, latency, and expected-vs-actual comparison.
-   **False allows are flagged loudly** in the toast and audit drawer.
-3. **Run test cards** — for each executed test, record the actual outcome,
-   PDP / PEP results with reason codes, latency, and hotwash notes. If the
-   test fails, use *Convert Failure to Finding* — the linked checks, tests,
-   and evidence flow into the finding automatically.
-4. **Score checklist items** — open each item, set the 0–4 maturity score, the
-   pass/partial/fail result, and attach the evidence that supports the score.
-   The dashboard's **Evidence Gap Tracker** flags any scored item that has no
-   evidence — those scores cannot be defended in the final report.
-5. **Daily rollups / hotwash** — Event Workspace → Daily Log captures what was
-   assessed, what broke, what was decided, and what happens next (Issues →
-   Decisions → Actions). The white paper's Day 0–5 execution model is shown
-   for reference.
-6. **Watch the critical gate** — the top-bar readiness chip turns red the
-   moment a critical item fails or an open critical finding appears. This is
-   deliberate: it prevents a misleading green rating when a false allow or
-   label loss has happened.
+### Phase 4 — Analysis & Reporting
 
-### Phase 4 — Analysis & Reporting (November–December)
+1. **Findings** — for each gap, write impact and recommendation, assign an
+   owner and due date, set remediation status.
+2. **Executive Narrative** — Report Builder → the Executive Narrative sits at
+   the top of the report's Executive Summary. Optionally use *Draft from
+   current scores & findings* (local AI).
+3. **Submit for Review** — Activity & Approvals → *Record Review Decision →
+   Submit*. Reviewers respond with *Changes Requested* or *Approved*.
+4. **Generate the report** — select sections, then *Generate Report* → *Print
+   / Save as PDF*. Add the Checklist CSV, Findings CSV, Evidence Index CSV,
+   and Full Event JSON to the appendix package.
+5. **Move the phase to *Complete / Archived***. The event stays in the
+   Program view for cross-event comparison.
 
-**Goal:** compare expected vs. actual, write findings, deliver the report.
+---
 
-1. **Set the phase to *Analysis & Reporting***.
-2. **Findings** — for each gap, write the impact and prioritized recommendation,
-   assign an owner and due date, and set the remediation status. Use the
-   optional local-AI *Draft impact & recommendation* button to bootstrap the
-   text from the linked items, tests, and evidence.
-3. **Executive Narrative** — Report Builder → the Executive Narrative field
-   sits at the top of the report's Executive Summary. The AI can draft it from
-   the event's recorded scores and findings; the assessor owns the final
-   wording.
-4. **Generate the report** — select the sections you want (11 available), then
-   *Generate Report* → *Print / Save as PDF* for the deliverable. Add the
-   Checklist CSV, Findings CSV, Evidence Index CSV, and Full Event JSON to
-   the appendix package.
-5. **Move the phase to *Complete / Archived***. The event stays in the Program
-   view for cross-event comparison.
+## Approvals and formal review
+
+v2 formalizes review so the report is defensible.
+
+- **Submit for Review** — the Assessment Lead posts a decision that ends the
+  active editing phase. Recorded with author, timestamp, and comments.
+- **Changes Requested** — a reviewer with `assessment.review` documents what
+  must change. Editing reopens automatically for the assigned roles.
+- **Approved** — an approver with `assessment.approve` closes the review. The
+  approval is stamped into the audit chain.
+- **Reopen** — an approver can reopen an approved assessment; the reopen event
+  is stamped too, so you never lose the record of what was "approved as of
+  X, reopened by Y for reason Z."
+
+Decisions are visible on the *Activity & Approvals* screen and appear in the
+generated report's appendix as the review chronology.
+
+---
+
+## Audit trail and attribution
+
+Every state change goes through the server, which:
+
+1. Diffs the incoming state against the last saved state and records the set
+   of changed JSON paths (see `src/audit.js → changedPaths`).
+2. Attributes each change to the authenticated user and their session IP /
+   user agent.
+3. Appends the entry to an **append-only log with a cryptographic hash
+   chain**: each entry hashes over `{ previous_hash, timestamp, author, paths,
+   payload_hash }`, so if any historical entry is altered the chain breaks.
+4. Every displayed record (checklist item, evidence, finding, thread, asset,
+   participant, system, daily log) surfaces a `Created by … · Updated by …`
+   line so ownership is never ambiguous.
+
+Users with `audit.view` see the full chronological log on the *Activity &
+Approvals* screen (assessment-scoped, most recent first, filterable). Users
+without `audit.view` still see the review chronology and any attribution shown
+inline.
 
 ---
 
@@ -272,14 +405,17 @@ one-click next-step buttons until planning is complete.
 
 | Module | Notes |
 |---|---|
-| **Dashboard** | Readiness gauge with the critical-gate note, weighted domain heatmap, weighted domain readiness bars, stat tiles (coverage, evidence, criticals, denials held), evidence-gap tracker, mission-thread readiness, and the Getting Started card for fresh events. All tiles and rows drill through. |
-| **Event Workspace** | Event profile (name, location, window, classification, phase, objectives, standards). Event Readiness Meter (8 planning inputs). Mission Threads. Protected Data Objects. Participants & Systems (with CSV import). Compliance Weights. Daily Log / Hotwash. |
-| **DCS Checklist** | All 55 checklist items grouped by domain, with the maturity rubric strip at the top. Filters: search, domain, result, workflow, severity, missing evidence, owner, mission thread. Bulk assign. Drill-in drawer covers scoring, notes, mission-thread links, evidence links, and finding generation. CSV export. |
-| **Test Cards** | Scenario library, stats (executed / passed / failed / outcome mismatches), filterable list, drill-in drawer with PDP/PEP results, latency, hotwash notes, and *Convert Failure to Finding*. |
-| **Evidence Locker** | Typed evidence records with quality grade and optional file attachment (small files stored, larger ones referenced by name). Log Template + *⇪ Ingest Decision Log* for PDP/PEP/SIEM CSV / JSON / NDJSON with an audit reconstruction timeline. Export Evidence Index. |
-| **Findings** | Severity (Critical / Major / Moderate / Observation / Strength), remediation status (Open / In Remediation / Risk Accepted / Closed), owner, due date, and clickable traceability chain. CSV export. |
-| **Report Builder** | 11 selectable sections; assessor-owned Executive Narrative (optional AI-drafted). Print-ready output. CSV / JSON exports: Checklist, Findings, Evidence Index, Full Event, Workspace Backup. |
-| **Program** | Cross-event: events table with phase / readiness / rating / coverage / evidence / open criticals; readiness trend; domain × event maturity matrix with first→latest deltas; reusable strengths library; program-wide open critical gaps. One-click *Reuse* to start the next event from any prior event's setup. |
+| **Sign In** | Bcrypt password check, session cookie (HttpOnly, SameSite), CSRF token issuance, rate-limited to defeat brute force, forced password change on first sign-in |
+| **Dashboard** | Readiness gauge with critical-gate note, weighted domain heatmap, domain readiness bars, stat tiles, evidence gap tracker, mission-thread readiness, Getting Started card for fresh events |
+| **Event Workspace** | Profile, readiness meter, mission threads, protected data objects, participants & systems (with CSV import), compliance weights, daily log |
+| **DCS Checklist** | 55 items grouped by domain, filters, bulk assign, drill-in drawer with attribution, score / notes / thread links / evidence links / finding generation, CSV export |
+| **Test Cards** | Scenario library, stats, filterable list, drill-in drawer with PDP/PEP + latency + hotwash notes, *Convert Failure to Finding* |
+| **Evidence Locker** | Typed records with quality grade, optional file attachment, decision-log ingestion with audit reconstruction timeline, evidence index export |
+| **Findings** | Severity, remediation status, owner, due date, traceability chain, CSV export |
+| **Report Builder** | 11 selectable sections; assessor-owned Executive Narrative (optional AI-drafted); print-ready output; CSV / JSON exports |
+| **Program** | Cross-event: events table with phase / readiness / rating / coverage / evidence / open criticals; readiness trend; domain × event maturity matrix; reusable-strengths library; program-wide open critical gaps; one-click *Reuse* to start the next event from any prior event's setup |
+| **Activity & Approvals** *(new)* | Review chronology, audit trail (for `audit.view`), *Record Review Decision* action for reviewers and approvers |
+| **Administration & Team** *(new)* | User directory, create / disable accounts, set system roles, assign assessment team members and roles |
 
 ### Scoring rubric (0–4 maturity)
 
@@ -343,112 +479,125 @@ true:
 - any Critical severity finding is in **Open / In Remediation / Risk Accepted** status.
 
 The dashboard's readiness gauge card explains exactly which items or findings
-tripped the gate and links directly to them. This is the tool's core opinion:
-a demonstrated false allow or lost label matters more than a healthy-looking
-average.
+tripped the gate and links directly to them. A demonstrated false allow or
+lost label matters more than a healthy-looking average.
 
 ---
 
 ## Running a program of assessments
 
-The app is built for a *series* of assessments over time, not a single event.
-
 - Every event carries an **assessment phase**, shown as a chip in the top bar.
 - **Reuse as Template** (Events ▾ or the Program view) clones an existing
   event's scope, threads, assets, weights, assignments, and test cards with
   all scores / evidence / findings cleared — ready for the next event.
-- The **Program view** compares events over time: is maturity improving, which
-  domains keep lagging, which critical gaps are still open anywhere in the
-  program, and which strength patterns should be reused.
-- **Event JSON export / import** moves individual events between machines or
-  archives them.
-- **Workspace backup / restore** (⬇ Backup Workspace / Events ▾ → Import JSON)
-  moves the entire program.
+- The **Program view** compares events over time: is maturity improving,
+  which domains keep lagging, which critical gaps are still open anywhere in
+  the program, and which strength patterns should be reused.
+- **Assessment JSON export / import** moves individual events between
+  machines or archives them (attribution is preserved).
+- **Database backups** move the entire program (see below).
 
 ---
 
 ## Docker deployment and configuration
 
-### What Docker mode adds over standalone
+### Services
 
-- **Shared team workspace.** The workspace lives on the server, not per-browser,
-  so multiple assessors work from one store during the same event.
-- **Persistence beyond the browser.** The `/data` volume survives container
-  restarts, image rebuilds, and browser cache clears.
-- **Concurrency safety.** Every save carries the revision it was based on; a
-  stale save gets `409` and the client re-syncs instead of clobbering a
-  teammate's work.
-- **Offline tolerance.** If the server drops, changes are kept in the browser
-  and resync when it returns. The user is told both ways.
-- **Automatic sync.** Browsers poll every 15 s to pick up others' changes
-  (politely deferred while an editor is open).
+`docker-compose.yml` defines two services:
+
+- **`db`** — `postgres:16-alpine`. Exposed only inside the compose network
+  (no host port published). Data persists in the `dcs-db` named volume.
+- **`app`** — the Node application. Listens on `${APP_PORT:-8080}`. Runs as
+  the non-root `node` user, uses `dumb-init`, and exposes a healthcheck
+  against `/health`.
+
+Traffic:
+
+```
+ browser ⇢ ${APP_PORT} (host)
+              ↓
+           app container ── internal DB network ──▶ db container
+```
+
+The database is never exposed to the host. To use an external Postgres
+instead, remove the `db` service from compose and point `DATABASE_URL` (or
+the individual `POSTGRES_*` variables) at your instance.
 
 ### Environment variables
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PORT` | `8080` | HTTP listen port |
-| `DATA_DIR` | `/data` | Where `workspace.json` is stored |
-| `BASIC_AUTH_USER` | *(unset)* | Enable HTTP Basic Auth by setting user + pass |
-| `BASIC_AUTH_PASS` | *(unset)* | Password used with `BASIC_AUTH_USER` |
+| `APP_PORT` | `8080` | Host port to publish |
+| `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | `dcs` / `dcs` / *(required)* | Database credentials |
+| `ADMIN_USERNAME` / `ADMIN_PASSWORD` / `ADMIN_DISPLAY_NAME` | *(required)* / *(required)* / *(defaulted)* | Bootstrap admin account (forced to change password on first login) |
+| `SECURE_COOKIES` | `false` | Set `true` when the app is served over HTTPS |
+| `TRUST_PROXY` | `0` | Set `1` when behind one trusted reverse proxy so client IP is captured correctly in the audit log |
+| `SESSION_HOURS` | `12` | Session lifetime |
+| `MAX_BODY_MB` | `32` | Upload cap; evidence attachments arrive as base64 |
+| `SEED_SAMPLE_DATA` | `true` | Auto-create the sample assessment on first boot |
 
-By default there is no authentication — run on a trusted network or front it
-with your own reverse proxy and TLS. `docker-compose.yml` has commented-out
-Basic Auth environment variables ready to enable.
-
-### HTTP API
-
-The frontend uses this API; anything that speaks JSON can too.
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/api/health` | Liveness probe + current revision |
-| `GET` | `/api/revision` | Current revision (used for polling) |
-| `GET` | `/api/workspace` | Full workspace `{ revision, state, savedAt }` |
-| `PUT` | `/api/workspace` | Body `{ revision, state }`. Returns `200` on save, `409` on stale revision |
-
-### Backups
-
-The workspace file is `/data/workspace.json` on the mounted volume:
-
-```bash
-docker cp dcs-command-center:/data/workspace.json ./backup-$(date +%F).json
-```
-
-You can also use **⬇ Backup Workspace** in the sidebar (downloads a JSON that
-the same or another instance can re-import via *Events ▾ → Import JSON*).
+Any variable is settable in `.env` (which docker-compose reads) or exported in
+your shell.
 
 ### Container hygiene
 
-- Base image: `node:22-alpine`, zero external `npm` dependencies.
-- Runs as a non-root user (`dcs`).
-- Healthcheck: `GET /api/health` every 30 s.
-- Body size cap: 64 MB (evidence attachments arrive as base64 data URLs).
-- Path traversal is blocked at the server; unknown API paths return `404`.
+- Base image: `node:22-alpine`; the only runtime dependencies (`express`,
+  `pg`, `bcryptjs`, `cookie-parser`, `compression`, `express-rate-limit`,
+  `helmet`) are locked in `package-lock.json`.
+- Runs as a non-root user.
+- HTTP hardening via `helmet`, CSRF token validation on state-changing
+  requests, session cookies HttpOnly + SameSite, login rate limiting.
+- Body size cap at `MAX_BODY_MB`.
+- Path traversal blocked; unknown API paths return `404`.
+- Graceful shutdown on `SIGTERM` / `SIGINT` drains connections and closes the
+  database pool before exit.
+- Healthcheck: `GET /health` every 30 s.
+
+---
+
+## Backup and restore
+
+Everything the platform holds — user accounts, sessions, assessments, audit
+chain — lives in Postgres. Two ready-made scripts:
+
+```bash
+# Point-in-time backup while the stack is up
+./scripts/backup.sh            # writes ./backups/dcs-<timestamp>.dump
+
+# Restore from a dump (destructive; will confirm)
+./scripts/restore.sh ./backups/dcs-2027-03-15T09-00-00Z.dump
+```
+
+Under the hood both call `pg_dump` / `pg_restore` inside the `db` container,
+so nothing needs to be installed on the host.
+
+Individual assessments can also be exported / imported as JSON via the UI
+(*Report Builder → Full Event JSON*, or *Events ▾ → Import JSON*) for
+transfer between deployments; attribution and audit history are preserved on
+export and re-applied on import.
 
 ---
 
 ## Data model and integrations
 
-### Core objects
+### Postgres schema (key tables)
 
-| Object | Purpose |
+| Table | Contents |
 |---|---|
-| `events` | Every assessment event: profile, phase, participants, systems, weights |
-| `mission_threads` | Operational scenarios tied to protected assets and expected outcomes |
-| `protected_objects` | Datasets, APIs, files, feeds, messages, data products |
-| `checklist_items` | The 55 white-paper checks per event, with score / result / workflow / evidence links |
-| `test_cards` | Scenario tests with expected vs. actual DCS outcome |
-| `evidence` | Screenshots, logs, exports, observations, decision-record ingests |
-| `findings` | Gaps, risks, strengths — with owners, due dates, and traceability |
-| `daily_rollups` | On-site execution summaries |
-| `standards_mapping` | Per-item mapping to DoD ZT / NIST / CISA / NSA guidance |
+| `users` | Named accounts, `password_hash`, system role, disabled flag, failed-login counter, lockout time, forced password change flag |
+| `roles` | Assessment role catalog with `permissions` (JSONB) |
+| `assessments` | One row per event with `state` (JSONB — the full workbench state), `revision` counter, `phase`, soft-delete columns, created/updated attribution |
+| `assessment_members` | Team membership: `(assessment_id, user_id) → role_id`, with attribution and timestamp |
+| `sessions` | Server-side session state: token hash, CSRF token, IP, user agent, expiry |
+| `audit_events` | Append-only audit log with hash chaining |
+| `reviews` | Formal Submit / Changes-Requested / Approve / Reopen decisions |
+| `app_meta` | Bootstrap / migration flags |
 
 ### Bulk loading (CSV)
 
-Event Workspace → **Participants** and → **Protected Data Objects** each have
-*CSV Template* (downloads the reference columns with an example row) and
-*Import CSV* buttons. Rows missing a `name` are skipped and reported.
+Event Workspace → *Participants* and → *Protected Data Objects* each have
+*CSV Template* + *Import CSV* buttons. Rows missing a `name` are skipped and
+reported.
 
 ### Decision-log ingestion
 
@@ -456,23 +605,43 @@ Evidence Locker → **⇪ Ingest Decision Log** imports a PDP / PEP / SIEM expor
 as a Decision Record evidence item.
 
 - **Formats:** CSV, JSON array, `{records: [...]}`, or NDJSON.
-- **Column aliases** are recognized so exports from different tools normalize
-  into the assessment schema: `@timestamp` / `principal` / `resource` /
-  `outcome` from a SIEM map the same as `timestamp` / `user` / `asset` /
-  `decision` from a gateway. Additional recognized aliases include
-  `expected_outcome`, `reason` / `policy_id`, `pep_result`,
-  `decision_latency_ms`.
+- **Column aliases** normalize exports from different tools into the
+  assessment schema (`@timestamp` / `principal` / `resource` / `outcome` →
+  `timestamp` / `user` / `asset` / `decision`).
 - **Auto-summary** on ingest: allows, denies, redact/mask/filter outcomes,
   distinct users and assets, average decision latency, time window.
-- **Expected-vs-actual detection.** When the export carries an expected column,
-  mismatches are counted and a **possible false allow** (expected deny,
-  observed allow) is flagged loudly, pointing at DCS-31 — the white paper's
-  "immediate escalation" red flag.
+- **Expected-vs-actual detection.** When the export carries an expected
+  column, mismatches are counted and **possible false allows are flagged
+  loudly**, pointing at DCS-31 — the white paper's immediate-escalation red
+  flag.
 - **Audit Reconstruction timeline** in the evidence drawer: filterable
-  chronological table (text filter, mismatches / allows / denies only), with
-  mismatch rows highlighted.
-- Ingests are capped at 3,000 records per file to protect browser storage —
-  filter exports to the event window first.
+  chronological table with mismatch highlighting.
+- Ingests capped at 3,000 records per file.
+
+### HTTP API
+
+The frontend uses this API; automation can too.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Liveness probe |
+| `POST` | `/api/auth/login` | Sign in; returns a session cookie and CSRF token |
+| `POST` | `/api/auth/logout` | Revoke the current session |
+| `POST` | `/api/auth/password` | Change password (used for the forced first-login change) |
+| `GET` | `/api/session` | Current user, roles, permission map |
+| `GET` | `/api/assessments` | List assessments the caller can see |
+| `POST` | `/api/assessments` | Create assessment (`assessment.create`) |
+| `GET` | `/api/assessments/:id` | Full assessment `{ revision, state, members }` |
+| `PUT` | `/api/assessments/:id` | Save with `{ revision, state }`; per-field permission checks; `409` on stale revision, `403` on disallowed fields |
+| `POST` | `/api/assessments/:id/reviews` | Record a review decision |
+| `GET` | `/api/assessments/:id/reviews` | Review chronology |
+| `GET` | `/api/audit?assessmentId=…&limit=…` | Audit trail (`audit.view`) |
+| `GET` | `/api/roles` | Assessment role catalog |
+| `GET` / `POST` / `PATCH` | `/api/admin/users` | User management (`users.manage`) |
+
+CSRF: state-changing requests must include the `X-CSRF-Token` header returned
+by `/api/session`. The client library in `js/auth.js` handles this
+transparently.
 
 ---
 
@@ -481,43 +650,57 @@ as a Decision Record evidence item.
 **✦ Local AI** (sidebar) connects the app to a model running on the same
 machine via [Ollama](https://ollama.com). Nothing is sent to any cloud service.
 
-When enabled it can:
+When enabled:
 
-- **Draft finding impact & recommendation** — in the finding editor, grounded
+- **Draft finding impact & recommendation** in the finding editor, grounded
   in the linked checklist requirements, expected-vs-actual test outcomes,
-  evidence records, and your notes.
-- **Draft the executive narrative** — in the Report Builder, grounded strictly
-  in the event's recorded scores and findings (the prompt says: do not invent
-  facts not present).
+  evidence, and notes.
+- **Draft the executive narrative** in the Report Builder, grounded strictly
+  in the event's recorded scores and findings.
 
 **Guardrail by design:** the assistant only writes into editable draft fields.
-It never scores items, never changes results, never certifies compliance. Every
-insert shows a *"review and edit before saving"* reminder.
+It never scores items, never changes results, never certifies compliance.
+Every insert shows a *"review and edit before saving"* reminder.
 
-**Setup:**
-
-1. Install [Ollama](https://ollama.com) and `ollama pull llama3.1` (or your
-   preferred local model).
-2. Serve the app over `http://localhost` — not `file://` — so the browser
-   allows the local request (Docker mode handles this).
-3. Sidebar → **✦ Local AI** → tick *Enable local AI drafting*, click
-   **Test Connection**, then Save.
+**Setup:** install Ollama, `ollama pull llama3.1`, then Sidebar → **✦ Local
+AI** → *Enable local AI drafting* → **Test Connection** → *Save*.
 
 ---
 
-## Data safety and backup
+## Downloading v1.0
 
-- **Docker mode:** the workspace persists in the `/data` volume on the server;
-  browsers keep a local offline cache. Use **⬇ Backup Workspace** and/or
-  `docker cp` for point-in-time backups. **Events ▾ → Import JSON** restores.
-- **Standalone mode:** data lives in browser `localStorage` (~5 MB per origin).
-  The sidebar footer shows the last backup age and the Events menu shows
-  current storage usage. Larger evidence files (over ~1.5 MB) are referenced by
-  name rather than stored, so you can point at the local evidence folder for
-  the on-site copy.
-- The workspace is a plain JSON file. Nothing about the format requires this
-  tool to read it — you can inspect it, diff it between events, or pipe it into
-  other analysis.
+v1.0 remains available as a downloadable release for teams that don't need
+multi-user Postgres and just want the local-first, single-user workbench.
+Two routes:
+
+- **`v1-legacy` branch** (available now) — this is v1's last revision published
+  as a permanent branch so it can be cloned or downloaded straight from
+  GitHub:
+  ```bash
+  git clone -b v1-legacy https://github.com/echofoxx/DCS-Compliance.git dcs-v1
+  # or, without the working tree:
+  git archive --format=zip --remote=<url> v1-legacy > dcs-v1.zip
+  ```
+  On the GitHub UI: **branch selector → `v1-legacy` → Code → Download ZIP**.
+- **`v1.0.0` release tag** — cut a proper GitHub release from the
+  `v1-legacy` branch (Releases → *Draft a new release* → choose target
+  `v1-legacy`, tag `v1.0.0`) so downloads carry the semantic-version tag and
+  the release page carries the v1 changelog.
+
+v1.0 characteristics you should expect:
+
+- Runs from `file://` or any static host; workspace lives in browser
+  `localStorage`.
+- Optional zero-dependency Node/Docker deployment with a single shared JSON
+  workspace on a Docker volume.
+- No user accounts, no roles, no audit chain, no formal approvals.
+- The same 55-item DCS checklist library, scoring engine, decision-log
+  ingestion, and report generation.
+
+The two versions **are not wire-compatible** — v1's Docker JSON workspace and
+v2's Postgres are different persistence models. Migrate by exporting an
+assessment from v1 (*Report Builder → Full Event JSON*) and importing into
+v2 (*Events ▾ → Import JSON*); attribution is added on import.
 
 ---
 
@@ -525,8 +708,10 @@ insert shows a *"review and edit before saving"* reminder.
 
 ### Delivered
 
-- ✅ Full DCS Framework content library (55 items, 10 domains, severities, red
-  flags, roadmap, execution model)
+**v1.0 — the assessment workbench**
+
+- ✅ Full DCS Framework content library (55 items, 10 domains, severities,
+  red flags, roadmap, execution model)
 - ✅ Executive Dashboard with critical gate and drill-in throughout
 - ✅ Event Workspace with phase lifecycle and readiness meter
 - ✅ 0–4 maturity scoring with per-event compliance weights
@@ -538,41 +723,74 @@ insert shows a *"review and edit before saving"* reminder.
 - ✅ Program view — cross-event maturity trend, matrix, reusable-strengths
   library
 - ✅ Bulk CSV import for participants and protected data objects
-- ✅ Optional local AI drafting (Ollama) for findings and the executive
-  narrative
+- ✅ Optional local AI drafting (Ollama)
 - ✅ Decision-log ingestion (CSV / JSON / NDJSON) with audit reconstruction
   timeline and false-allow detection
-- ✅ Docker-hosted deployment with shared, server-persisted workspace and
-  concurrency-safe sync
-- ✅ Standalone browser mode preserved as a first-class option
-- ✅ Optional HTTP Basic Auth
-- ✅ Light / dark themes; accessible palette (validated); print stylesheet
-- ✅ Non-root Docker image with healthcheck
+- ✅ Docker-hosted deployment (shared JSON workspace)
+- ✅ Standalone browser mode
+
+**v2.0 — the multi-user platform**
+
+- ✅ Named user accounts, bcrypt hashing, forced first-login password change
+- ✅ 3 system access levels + 13 assessment-specific roles with per-field
+  permission checks
+- ✅ PostgreSQL persistence with revisioned assessment state
+- ✅ Record-level attribution across all assessment artifacts
+- ✅ Append-only, cryptographically chained audit trail
+- ✅ Formal Submit / Changes Requested / Approve / Reopen workflow
+- ✅ Activity & Approvals screen with review chronology and audit view
+- ✅ Administration & Team screen for accounts and assessment staffing
+- ✅ Session cookies + CSRF, login rate limit, lockout, session revocation
+- ✅ `helmet`-hardened HTTP, non-root container, internal DB network,
+  graceful shutdown, healthcheck
+- ✅ `pg_dump` / `pg_restore` backup and restore scripts
+- ✅ `node --test` coverage for RBAC and audit-chain invariants
+- ✅ **Framework Mode** — NATO Only / US Only / Combined / Custom
+  per-assessment selector with server-side RBAC (Assessment Scope tab in
+  the Event Workspace, chip in the top bar, checklist header updates)
+- ✅ **Partial Scope** — bulk domain exclusion with required rationale,
+  per-item scope overrides, framework-driven scope, and a
+  scope-aware scoring engine that redistributes domain weights when whole
+  domains are excluded so the overall stays a normalized 0..1. The
+  generated report auto-includes an Assessment Scope Statement
 
 ### Planned
 
-Rough priority order — say the word to promote any of these:
+**Next up (in priority order):**
 
-- ⬜ **Role-based access control** — per-user login and Assessment Lead /
-  Assessor / Steward / SME / Leadership Viewer permissions enforced by the
-  server. (Natural next step now that a server exists.)
+- ✅ **Framework Mode** — per-assessment selector for **NATO Only / US Only /
+  Combined / Custom**, driving which checklist items are in scope. Persisted
+  server-side; gated by `assessment.plan.edit`. *(delivered)*
+- ✅ **Partial Scope** — assess parts of the checklist, not all 55.
+  Per-item `in_scope / out_of_scope / not_applicable` with a required
+  rationale, bulk selection by domain, and framework-driven scope. Scoring
+  engine and critical gate honor scope; the report auto-generates a Scope
+  Statement. *(delivered)*
+- ⬜ **NATO checklist content** — new domain 5.11 (Coalition Interoperability
+  & NATO Alignment), items `DCS-56` through `DCS-65`, and structured US ↔
+  NATO ↔ Joint standards mappings (STANAG 4774, 4778, 5636, CMBAC,
+  NIST 800-63, 800-162, FIPS 140-3, CNSA 2.0).
+- ⬜ **XML SPIF validator and STANAG 4778 binding verification** — server-side
+  STANAG 4774 SPIF parser, cross-check of registered assets against the
+  loaded policy, WebCrypto-based signature verification of label ↔ data
+  bindings; produces evidence records and a *NATO-Releasable Compliance
+  Summary* report section.
+- ⬜ **Mission Thread cyber resiliency** — criticality classification and
+  loss-of-C/I/A impact per mission thread; new domain 5.12 tied to
+  NIST 800-160 Vol 2 and DoDI 5000.89.
+- ⬜ **Chain of custody + STIX 2.1 / TAXII interop** — SHA-based provenance
+  for evidence, STIX bundle evidence type; NIST 800-86 alignment.
+- ⬜ **Privacy, sovereignty & PII** — new domain 5.14 with data residency,
+  PII marking, lawful basis, and subject rights; GDPR / NIS2 mapping.
 - ⬜ **Auto-matching ingested log records to test cards** — attach relevant
   decision-log slices to each test card by scenario / requestor / asset.
 - ⬜ **Word (.docx) report export** — in addition to Print / PDF.
-- ⬜ **Approval / sign-off gates** — Assessment Lead sign-off before findings
-  or the final report are marked final.
 - ⬜ **Live SIEM / API pull** — poll a configured log endpoint during
-  execution instead of manual file imports.
-- ⬜ **Label persistence validator** — structured before/after label comparison
-  with automatic pass/fail scoring for DCS-19 / DCS-37.
-- ⬜ **Timeline-based audit reconstruction playback** — replay decision events
-  scrubbing forward through time.
-- ⬜ **Multi-user real-time presence** — live cursors and "who's editing what"
-  indicators.
-- ⬜ **Postgres storage backend** — optional swap-in for `workspace.json` when
-  the program grows beyond what a single JSON file wants to hold.
-- ⬜ **PR-style history / audit log** — server-side change history with author
-  attribution.
+  execution instead of manual imports.
+- ⬜ **Timeline-based audit reconstruction playback** — replay decision
+  events scrubbing forward through time.
+- ⬜ **Multi-user real-time presence** — live cursors and "who's editing
+  what" indicators.
 
 ### Out of scope on purpose
 
@@ -593,40 +811,72 @@ Rough priority order — say the word to promote any of these:
 - **NSA CSI** — *Advancing Zero Trust Maturity Throughout the Data Pillar*
 - **DoD Data Strategy (2020)**
 
-Every checklist item carries its own standards mapping, visible in the item
-drawer and included in the report's Standards Coverage section.
+The NATO expansion under Planned above will add:
+
+- **STANAG 4774** — Confidentiality Metadata Label (XML SPIF)
+- **STANAG 4778** — Metadata Binding
+- **STANAG 5636** — NCMS Core Metadata Specification
+- **CMBAC** — Confidentiality Metadata-Based Access Control
+- **NIST SP 800-63** — Digital Identity Guidelines
+- **NIST SP 800-162** — Attribute-Based Access Control
+- **FIPS 140-3** — Cryptographic module validation
+- **NSA CNSA 2.0** — Commercial National Security Algorithm suite
 
 ---
 
 ## Repository layout
 
 ```
-index.html            App shell (plain script tags — works from file://)
-server.js             Zero-dependency Node server: static app +
-                      shared-workspace API with revision-based conflict
-                      detection
-Dockerfile            Container image (node:22-alpine, non-root, healthcheck)
-docker-compose.yml    One-command team deployment with a persistent volume
-.dockerignore         Excludes docs, git, and markdown from the image
+index.html            Authenticated app shell
+server.js             Node bootstrap: initializes DB, cleans expired
+                      sessions, starts the Express app, handles shutdown
+package.json          Runtime deps (express, pg, bcryptjs, helmet,
+                      cookie-parser, compression, express-rate-limit)
+.env.example          Copy to .env before first deployment
+Dockerfile            node:22-alpine, non-root user, healthcheck
+docker-compose.yml    App + Postgres, internal DB network, named volume
+
+src/
+  app.js              Express app: routes, middleware, CSRF, RBAC gates
+  db.js               Postgres schema + Pool, initial data seeding
+  rbac.js             Role catalog, permission tokens, JSON-path to
+                      permission mapping, `can()` / `hasWritePermission()`
+  audit.js            Append-only audit log with cryptographic hash
+                      chain; `changedPaths()` diffing
+  security.js         Session issuance, password hashing, rate limiter,
+                      CSRF token helpers
+  config.js           Environment parsing
+
+test/
+  rbac.test.js        RBAC invariants
+  audit.test.js       Audit-chain invariants
+
+scripts/
+  backup.sh           pg_dump against the running db container
+  restore.sh          pg_restore against the running db container
+
 css/app.css           Styling, light/dark themes, print stylesheet
-js/template.js        The reusable assessment template: 10 domains, 55
-                      checklist items, rubric, severities, test-card
-                      library, roadmap, phases
-js/store.js           State, persistence (server-synced or localStorage),
-                      scoring engine, CSV parsing, exports
-js/ui.js              DOM builders, modal / drawer / toast primitives
-js/charts.js          Gauge, heatmap, bar rows (accessible, palette-validated)
-js/assistant.js       Optional local-AI drafting (Ollama)
-js/view-dashboard.js  Executive Dashboard
-js/view-event.js      Event Workspace (profile, threads, assets, people,
-                      weights, daily log)
-js/view-checklist.js  DCS Checklist with filters, drawer, bulk assign
-js/view-testcards.js  Test Cards with the scenario library
-js/view-evidence.js   Evidence Locker + decision-log ingestion
-js/view-findings.js   Findings with traceability chain
-js/view-reports.js    Report Builder
-js/view-program.js    Cross-event Program view
-js/app.js             Shell, routing, sidebar, event / theme / AI controls
+
+js/                   Client bundle (plain script tags, no build step)
+  template.js         DCS domains, 55 checklist items, rubric, severities,
+                      test-card library, execution model, roadmap, phases
+  store.js            Client state, scoring engine, CSV parsing, exports
+  ui.js               DOM builders, modal / drawer / toast / attribution
+  charts.js           Gauge, heatmap, bar rows (validated palette)
+  auth.js             Session, CSRF, permission context, `request()` fetcher
+  assistant.js        Optional local-AI drafting (Ollama)
+  view-dashboard.js   Executive Dashboard
+  view-event.js       Event Workspace
+  view-checklist.js   DCS Checklist
+  view-testcards.js   Test Cards
+  view-evidence.js    Evidence Locker + decision-log ingestion
+  view-findings.js    Findings + traceability chain
+  view-reports.js     Report Builder
+  view-program.js     Cross-event Program view
+  view-activity.js    Activity & Approvals (review + audit)
+  view-administration.js  Administration & Team
+  app.js              Shell, routing, sidebar, event / theme / AI controls
+
 docs/screenshots/     Product screenshots used in this README
 ```
 
@@ -634,37 +884,28 @@ docs/screenshots/     Product screenshots used in this README
 
 ## Development
 
-The app is intentionally build-step free: plain HTML, CSS, and script tags. To
-work on it:
-
 ```bash
-# static mode
-python3 -m http.server 8080
+# install runtime deps
+npm install
 
-# or with the API server
-node server.js                 # listens on :8080, writes to ./data
+# syntax check
+npm run check
+
+# unit tests (node:test)
+npm test
+
+# dev server with file-watch reload
+npm run dev
 ```
 
-Syntax-check the JS:
-
-```bash
-for f in js/*.js server.js; do node --check "$f"; done
-```
-
-End-to-end verification uses Playwright (Chromium) from a scratchpad — see the
-`drive*.js` scripts in the local scratch directory for the recorded checks
-(dashboard render, checklist drawer save, log ingestion, two-browser shared
-workspace, Basic Auth). All commits to this branch have been verified this way
-against the built Docker image.
-
-### Design system
-
-Chart palette follows the validated reference data-viz palette (light and
-dark modes, CVD-safe categorical ordering, sequential blue for magnitude,
-reserved status colors). See `js/charts.js` and `css/app.css`.
+The scratchpad `drive*.js` scripts recorded during development contain full
+Playwright / Chromium end-to-end drives (dashboard render, checklist drawer
+save, log ingestion, two-browser shared workspace, Basic Auth) — retained as
+a verification pattern for future changes.
 
 ### Contributing
 
 Development happens on branch `claude/dcs-checklist-compliance-app-2sq8k1`;
 pull request [`#1`](https://github.com/echofoxx/DCS-Compliance/pull/1) is the
-current thread of work.
+current thread of work. v1.0 is preserved on the `v1.0.0` tag; v2.0 is on
+this branch and becomes `main` on merge.

@@ -1,14 +1,13 @@
 /* =========================================================================
  * DCS Assessment Command Center — Store
- * State management, localStorage persistence, scoring engine, import/export.
- * Local-first by design: all data lives in the browser; a full event (or the
- * whole workspace) can be exported/imported as JSON for transfer or backup.
+ * State management, authenticated API persistence, scoring, import/export.
+ * The server database is authoritative. Browser memory is only a working copy;
+ * classified assessment records are not retained in localStorage.
  * ========================================================================= */
 
 "use strict";
 
 const Store = (() => {
-  const LS_KEY = "dcs_command_center_v1";
   let state = null;
   const listeners = [];
 
@@ -26,6 +25,8 @@ const Store = (() => {
       score: null,               // 0-4 or null (unscored)
       result: null,              // pass | partial | fail | no | na
       workflow: "not_started",   // not_started | in_progress | complete | blocked
+      scope: "in_scope",         // in_scope | out_of_scope | not_applicable
+      scopeReason: "",           // why this item is out-of-scope (for the report)
       assignee: "",
       missionThreadIds: [],
       notes: "",
@@ -35,11 +36,25 @@ const Store = (() => {
     }));
   }
 
+  /* True when the checklist item is US-only under the current framework mode
+     (or NATO-only, or excluded from a Custom scope). Framework tags default
+     to ["US"] for the existing library. */
+  function itemInFrameworkMode(itemId, mode) {
+    if (!mode || mode === "combined" || mode === "custom") return true;
+    const tpl = DCS_TEMPLATE.CHECKLIST.find((t) => t.id === itemId);
+    const tags = (tpl && tpl.frameworks) || DCS_TEMPLATE.DEFAULT_FRAMEWORKS;
+    if (mode === "us_only")   return tags.includes("US") || tags.includes("JOINT");
+    if (mode === "nato_only") return tags.includes("NATO") || tags.includes("JOINT");
+    return true;
+  }
+
   function newEvent(fields = {}) {
     return Object.assign({
       id: uid("EVT"),
       name: "New DCS Assessment Event",
       phase: "planning",
+      frameworkMode: "combined",   // combined | us_only | nato_only | custom
+      customScopeNote: "",         // rationale surfaced in the report for Custom mode
       location: "",
       classification: "UNCLASSIFIED",
       eventWindow: "",
@@ -264,42 +279,37 @@ const Store = (() => {
       if (ev.execNarrative === undefined) ev.execNarrative = "";
       if (!ev.dailyLogs) ev.dailyLogs = [];
       if (!ev.domainWeights) ev.domainWeights = Object.fromEntries(DCS_TEMPLATE.DOMAINS.map((d) => [d.id, d.weight]));
+      // Framework Mode + Partial Scope migration (introduced 2027):
+      // pre-existing events default to combined (no behavior change) and
+      // every checklist item is in_scope.
+      if (!ev.frameworkMode) ev.frameworkMode = "combined";
+      if (ev.customScopeNote === undefined) ev.customScopeNote = "";
       // pick up checklist items added to the template after the event was created
       DCS_TEMPLATE.CHECKLIST.forEach((t) => {
         if (!ev.checklist.some((c) => c.id === t.id)) {
           ev.checklist.push({ id: t.id, score: null, result: null, workflow: "not_started",
+            scope: "in_scope", scopeReason: "",
             assignee: "", missionThreadIds: [], notes: "", evidenceIds: [], findingIds: [], updatedAt: null });
         }
+      });
+      // Backfill scope fields on items that predate this feature.
+      ev.checklist.forEach((c) => {
+        if (!c.scope) c.scope = "in_scope";
+        if (c.scopeReason === undefined) c.scopeReason = "";
       });
     });
     return st;
   }
 
   function load() {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      state = raw ? migrate(JSON.parse(raw)) : defaultState();
-    } catch (e) {
-      console.error("State load failed, starting fresh:", e);
-      state = defaultState();
-    }
-    if (!state.events.length) {
-      const ev = newEvent();
-      state.events.push(ev);
-      state.activeEventId = ev.id;
-    }
-    save();
-    return initRemote(); // resolves once server detection completes (no-op on file://)
+    state = { version: 2, activeEventId: null, events: [], settings: { theme: localStorage.getItem("dcs_theme") || "auto" }, lastBackupAt: null };
+    return initRemote();
   }
 
   function persistLocal() {
     try {
-      localStorage.setItem(LS_KEY, JSON.stringify(state));
+      localStorage.setItem("dcs_theme", state.settings.theme || "auto");
     } catch (e) {
-      // Most likely quota exceeded from large evidence attachments.
-      if (typeof UI !== "undefined" && UI.toast) {
-        UI.toast("Storage limit reached — remove large evidence attachments or export/backup your data.", "error");
-      }
       console.error("Save failed:", e);
     }
   }
@@ -310,10 +320,9 @@ const Store = (() => {
     schedulePush();
   }
 
-  /* ---------------------------------------------- remote sync (Docker mode)
-   * When the app is served by server.js (the Docker image), the workspace
-   * lives on the server and is shared by the whole team. localStorage stays
-   * as an offline cache. Writes are optimistic: each PUT carries the
+  /* ---------------------------------------------- authenticated server sync
+   * The database contains the assessments visible to the signed-in user.
+   * Writes are optimistic: each PUT carries the
    * revision it was based on; a 409 means someone else saved first, so we
    * adopt the server state rather than clobbering it. A light poll picks
    * up teammates' changes between our own saves.
@@ -321,37 +330,35 @@ const Store = (() => {
   const remote = { enabled: false, revision: 0, timer: null, pushing: false, queued: false, offline: false };
 
   async function api(path, opts) {
-    const res = await fetch(path, Object.assign({ headers: { "Content-Type": "application/json" } }, opts));
-    if (res.status === 409) {
-      const j = await res.json().catch(() => ({}));
-      const err = new Error("conflict");
-      err.conflict = true;
-      err.revision = j.revision;
-      throw err;
-    }
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    try { return await Auth.request(path, opts); }
+    catch (err) { if (err.status === 409) { err.conflict = true; err.revision = err.payload?.revision; } throw err; }
   }
 
   async function initRemote() {
-    if (typeof location === "undefined" || !/^https?:$/.test(location.protocol)) return;
-    try {
-      const h = await api("api/health");
-      if (!h || !h.ok) return;
-      remote.enabled = true;
-      const ws = await api("api/workspace");
-      if (ws.state && Array.isArray(ws.state.events) && ws.state.events.length) {
-        state = migrate(ws.state);          // server is the source of truth
-        remote.revision = ws.revision;
-        persistLocal();
-      } else {
-        remote.revision = ws.revision;      // first boot: seed with this browser's data
-        await pushNow();
-      }
-      setInterval(pollRemote, 15000);
-    } catch (e) {
-      remote.enabled = false;               // static hosting — stay local-first
+    const h = await api("/api/health");
+    if (!h || !h.ok) throw new Error("Application health check failed.");
+    remote.enabled = true;
+    const ws = await api("/api/workspace");
+    Auth.setAccess(ws.access);
+    if (ws.state && Array.isArray(ws.state.events) && ws.state.events.length) {
+      const preferred = state.activeEventId;
+      state = migrate(ws.state);
+      if (preferred && state.events.some((e) => e.id === preferred)) state.activeEventId = preferred;
+      remote.revision = ws.revision;
+    } else if (Auth.globalPermissions().includes("assessment.create") && !Auth.user().forcePasswordChange) {
+      state = Auth.feature("seedSampleData") ? defaultState() : (() => { const ev = newEvent({ name: "New DCS Assessment" }); return { version: 2, activeEventId: ev.id, events: [ev], settings: { theme: state.settings.theme }, lastBackupAt: null }; })();
+      remote.revision = ws.revision;
+      await pushNow();
+      const seeded = await api("/api/workspace");
+      Auth.setAccess(seeded.access);
+      state = migrate(seeded.state);
+      remote.revision = seeded.revision;
+    } else {
+      state = migrate(ws.state || state);
+      remote.revision = ws.revision;
     }
+    persistLocal();
+    setInterval(pollRemote, 15000);
   }
 
   function schedulePush() {
@@ -370,6 +377,12 @@ const Store = (() => {
         body: JSON.stringify({ revision: remote.revision, state })
       });
       remote.revision = resp.revision;
+      if (state.events.some((event) => !Auth.assessmentAccess(event.id).roleId)) {
+        const refreshed = await api("/api/workspace");
+        Auth.setAccess(refreshed.access);
+        state = migrate(refreshed.state);
+        remote.revision = refreshed.revision;
+      }
       if (remote.offline) {
         remote.offline = false;
         UI.toast("Server connection restored — workspace synced.");
@@ -377,9 +390,10 @@ const Store = (() => {
     } catch (err) {
       if (err.conflict) {
         await adoptServerState("Another assessor saved first — loaded the latest shared workspace. Re-apply your last edit if it is missing.", true);
-      } else if (!remote.offline) {
+      } else {
+        if (!remote.offline) UI.toast(err.message || "The save was rejected. Reloading the authorized server state.", "error");
         remote.offline = true;
-        UI.toast("Server unreachable — changes are kept in this browser and will sync when it returns.", "error");
+        await adoptServerState("Your unsaved local change was discarded; the current authorized version was reloaded.", true).catch(() => {});
       }
     } finally {
       remote.pushing = false;
@@ -404,6 +418,7 @@ const Store = (() => {
     const ws = await api("api/workspace");
     if (!ws.state || !Array.isArray(ws.state.events)) return;
     state = migrate(ws.state);
+    Auth.setAccess(ws.access);
     remote.revision = ws.revision;
     persistLocal();
     listeners.forEach((fn) => fn());
@@ -470,12 +485,24 @@ const Store = (() => {
   }
 
   /* -------------------------------------------------------- scoring engine */
-  // An item counts toward scoring when it is applicable (result !== 'na')
-  // and has a score. Domain % = mean(score)/4. Overall = weight-blended
-  // domain %, over domains that have at least one scored item.
+  // An item counts toward scoring when it is in-scope, applicable (result !==
+  // 'na'), and has a score. Domain % = mean(score)/4. Overall = weight-blended
+  // domain %, over domains that have at least one scored in-scope item.
+  //
+  // Framework Mode + Partial Scope both filter through this: an item is
+  // in-scope when its scope field is in_scope AND (framework mode is
+  // combined/custom OR the item's framework tags intersect the mode).
+  function isInScope(ev, c) {
+    if (c.scope && c.scope !== "in_scope") return false;
+    return itemInFrameworkMode(c.id, ev.frameworkMode);
+  }
+
   function computeScores(ev) {
+    const inScope = ev.checklist.filter((c) => isInScope(ev, c));
+    const outOfScope = ev.checklist.length - inScope.length;
+
     const domains = DCS_TEMPLATE.DOMAINS.map((d) => {
-      const items = ev.checklist.filter((c) => templateItem(c.id).domainId === d.id);
+      const items = inScope.filter((c) => templateItem(c.id).domainId === d.id);
       const applicable = items.filter((c) => c.result !== "na");
       const scored = applicable.filter((c) => c.score !== null && c.result !== "no");
       const avg = scored.length ? scored.reduce((s, c) => s + c.score, 0) / scored.length : null;
@@ -483,35 +510,40 @@ const Store = (() => {
       return {
         id: d.id, name: d.name, short: d.short,
         weight: ev.domainWeights[d.id] ?? d.weight,
-        itemCount: items.length,
+        itemCount: items.length,          // in-scope items only
         applicable: applicable.length,
         scoredCount: scored.length,
         avgScore: avg,                       // 0-4 or null
         pct: avg === null ? null : avg / 4,  // 0-1 or null
         evidencePct: applicable.length ? withEvidence / applicable.length : 0,
-        failures: applicable.filter((c) => c.result === "fail").length
+        failures: applicable.filter((c) => c.result === "fail").length,
+        inScope: items.length > 0            // domain has any in-scope item?
       };
     });
 
-    const rated = domains.filter((d) => d.pct !== null);
-    const wSum = rated.reduce((s, d) => s + d.weight, 0);
-    const overallPct = wSum ? rated.reduce((s, d) => s + d.pct * d.weight, 0) / wSum : null;
+    // Weights are redistributed across domains that have at least one
+    // in-scope item so the overall stays a normalized 0..1 even when whole
+    // domains are excluded from the assessment.
+    const contributing = domains.filter((d) => d.inScope && d.pct !== null);
+    const wSum = contributing.reduce((s, d) => s + d.weight, 0);
+    const overallPct = wSum ? contributing.reduce((s, d) => s + d.pct * d.weight, 0) / wSum : null;
 
-    const allApplicable = ev.checklist.filter((c) => c.result !== "na");
+    const allApplicable = inScope.filter((c) => c.result !== "na");
     const allScored = allApplicable.filter((c) => c.score !== null && c.result !== "no");
     const coverage = allApplicable.length ? allScored.length / allApplicable.length : 0;
     const evidenceCompleteness = allApplicable.length
       ? allApplicable.filter((c) => c.evidenceIds.length > 0).length / allApplicable.length : 0;
 
     /* red-flag gate: a failed critical checklist item or an open critical
-       finding caps the rating — no green dashboard over a critical gap. */
-    const criticalItemFails = ev.checklist.filter(
+       finding caps the rating — no green dashboard over a critical gap.
+       Out-of-scope items are excluded here too: they can't trip the gate. */
+    const criticalItemFails = inScope.filter(
       (c) => c.result === "fail" && templateItem(c.id).severity === "critical"
     );
     const redFlags = DCS_TEMPLATE.RED_FLAGS.filter((rf) =>
       rf.itemIds.some((id) => {
         const it = ev.checklist.find((c) => c.id === id);
-        return it && it.result === "fail";
+        return it && it.result === "fail" && isInScope(ev, it);
       })
     );
     const openCriticalFindings = ev.findings.filter(
@@ -530,6 +562,9 @@ const Store = (() => {
     return {
       domains, overallPct, coverage, evidenceCompleteness, rating, gated,
       criticalItemFails, openCriticalFindings, redFlags,
+      inScopeCount: inScope.length,
+      outOfScopeCount: outOfScope,
+      frameworkMode: ev.frameworkMode || "combined",
       openFindingsBySeverity: Object.fromEntries(
         DCS_TEMPLATE.SEVERITIES.map((s) => [
           s.id, ev.findings.filter((f) => f.severity === s.id && f.status !== "closed").length
@@ -593,22 +628,21 @@ const Store = (() => {
 
   function exportEventJSON(ev) {
     download(`dcs-event-${slug(ev.name)}.json`,
-      JSON.stringify({ exported: nowISO(), app: "DCS Assessment Command Center", version: 1, event: ev }, null, 2));
+      JSON.stringify({ exported: nowISO(), app: "DCS Assessment Command Center", version: 2, event: ev }, null, 2));
   }
 
   function exportWorkspaceJSON() {
     state.lastBackupAt = nowISO();
     download("dcs-workspace-backup.json",
-      JSON.stringify({ exported: state.lastBackupAt, app: "DCS Assessment Command Center", version: 1, workspace: state }, null, 2));
+      JSON.stringify({ exported: state.lastBackupAt, app: "DCS Assessment Command Center", version: 2, workspace: state }, null, 2));
     save();
   }
 
-  // Approximate localStorage footprint (browsers allow ~5 MB per origin).
+  // Compatibility helper retained for older extensions; assessment content is server-backed.
   function storageInfo() {
-    let bytes = 0;
-    try { bytes = new Blob([localStorage.getItem(LS_KEY) || ""]).size; } catch (e) { /* estimate only */ }
-    const quota = 5 * 1024 * 1024;
-    return { bytes, quota, pct: bytes / quota };
+    const bytes = new Blob([JSON.stringify(state)]).size;
+    const quota = 32 * 1024 * 1024;
+    return { bytes, quota, pct: bytes / quota, serverBacked: true };
   }
 
   function importJSON(obj) {
@@ -710,6 +744,7 @@ const Store = (() => {
     duplicateEventAsTemplate, templateItem, domain,
     computeScores, linkEvidence, unlinkEvidence, deleteEvidence,
     exportEventJSON, exportWorkspaceJSON, importJSON, storageInfo, parseCSV,
-    exportChecklistCSV, exportFindingsCSV, exportEvidenceCSV, download
+    exportChecklistCSV, exportFindingsCSV, exportEvidenceCSV, download,
+    isInScope, itemInFrameworkMode
   };
 })();

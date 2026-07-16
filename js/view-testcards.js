@@ -129,6 +129,7 @@ const ViewTestCards = (() => {
   function openCard(ev, t) {
     const mismatch = t.actualOutcome && t.expectedOutcome && t.actualOutcome !== t.expectedOutcome;
     UI.drawer(t.title, t.dcsUseCase || "Test Card", el("div", {},
+      UI.attribution(t),
       mismatch ? el("div", { class: "gate-note" },
         el("strong", {}, "Outcome mismatch: "), `expected “${t.expectedOutcome}”, observed “${t.actualOutcome}”.`) : null,
       el("dl", { class: "detail-list" },
