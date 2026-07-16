@@ -1,6 +1,6 @@
 {
   "name": "dcs-assessment-command-center",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "description": "Multi-user Data-Centric Security assessment, evidence, findings, and reporting platform",
   "main": "server.js",
@@ -8,7 +8,7 @@
     "start": "node server.js",
     "dev": "NODE_ENV=development node --watch server.js",
     "test": "node --test test/*.test.js",
-    "check": "node --check server.js && node --check src/app.js && node --check src/db.js && node --check src/security.js && node --check src/rbac.js && node --check src/audit.js"
+    "check": "node --check server.js && node --check src/app.js && node --check src/db.js && node --check src/security.js && node --check src/rbac.js && node --check src/audit.js && node --check src/spif.js"
   },
   "engines": {
     "node": ">=22"

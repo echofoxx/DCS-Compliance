@@ -12,6 +12,7 @@ const { pool, workspaceRevision, bumpWorkspaceRevision } = require("./db");
 const security = require("./security");
 const rbac = require("./rbac");
 const { changedPaths, stampAttribution, writeAudit, compactSnapshot, auditExcerpt } = require("./audit");
+const spif = require("./spif");
 
 const app = express();
 if (config.trustProxy) app.set("trust proxy", config.trustProxy);
@@ -387,6 +388,52 @@ app.get("/api/audit", asyncRoute(async (req, res) => {
     [assessmentId || null, limit]
   );
   res.json({ entries: result.rows });
+}));
+
+/* -------------------------------------------------------------- SPIF */
+// STANAG 4774 SPIF structural validation + asset cross-check.
+// Requires evidence.manage on the assessment (produces evidence-like output),
+// or assessment.plan.edit when the caller intends to store the validated
+// policy on the assessment record.
+app.post("/api/assessments/:assessmentId/spif/validate", asyncRoute(async (req, res) => {
+  if (!(await requireAssessmentPermission(req, res, "evidence.manage"))) return;
+  const xml = typeof req.body?.xml === "string" ? req.body.xml : null;
+  if (!xml) return res.status(400).json({ error: "Body must include { xml }.", code: "BAD_REQUEST" });
+  let parsed;
+  try { parsed = spif.parseXml(xml); }
+  catch (err) { return res.status(400).json({ error: `SPIF parse failed: ${err.message}`, code: "SPIF_PARSE" }); }
+  const { policy, rules } = spif.validateSPIF(parsed);
+
+  // Load the current assessment state to cross-check assets against policy.
+  const stateRow = await pool.query("SELECT state FROM assessments WHERE id=$1 AND deleted_at IS NULL", [req.params.assessmentId]);
+  const assets = stateRow.rows[0]?.state?.assets || [];
+  const assetFindings = spif.crossCheckAssets(policy, assets);
+
+  await recordAudit({
+    assessmentId: req.params.assessmentId, actor: actor(req.user),
+    action: "spif.validate", entityType: "spif", entityId: policy?.id || "unknown",
+    metadata: { rulesPassed: rules.filter((r) => r.ok).length, rulesFailed: rules.filter((r) => !r.ok).length,
+      assetFindings: assetFindings.map((f) => f.status).reduce((m, s) => { m[s] = (m[s] || 0) + 1; return m; }, {}) }
+  }, bumpWorkspaceRevision);
+  res.json({ policy, rules, assetFindings });
+}));
+
+// STANAG 4778 binding verification. Same permission as SPIF validation.
+// The public key is provided per-request and is not persisted — key custody
+// stays outside the app by design.
+app.post("/api/assessments/:assessmentId/spif/verify-binding", asyncRoute(async (req, res) => {
+  if (!(await requireAssessmentPermission(req, res, "evidence.manage"))) return;
+  try {
+    const result = spif.verifyBinding(req.body || {});
+    await recordAudit({
+      assessmentId: req.params.assessmentId, actor: actor(req.user),
+      action: "spif.verify_binding", entityType: "spif_binding", entityId: (result.labelDigestHex || "").slice(0, 32),
+      metadata: { valid: result.valid, algorithm: result.algorithm, hash: result.hash }
+    }, bumpWorkspaceRevision);
+    res.json(result);
+  } catch (err) {
+    return res.status(400).json({ error: err.message, code: "SPIF_BINDING" });
+  }
 }));
 
 app.use("/api", (_req, res) => res.status(404).json({ error: "Unknown API route.", code: "NOT_FOUND" }));

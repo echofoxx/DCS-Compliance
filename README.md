@@ -1,4 +1,4 @@
-# DCS Assessment Command Center v2.0
+# DCS Assessment Command Center v2.1
 
 A **database-backed, multi-user web application for planning, executing,
 scoring, reviewing, and reporting Data-Centric Security (DCS) compliance
@@ -19,6 +19,34 @@ PostgreSQL-backed multi-user Docker deployment.**
 ![Executive Dashboard](docs/screenshots/01-dashboard.png)
 
 ---
+
+## What's new in v2.1
+
+Two coalition-facing features built on top of the v2.0 multi-user platform:
+
+- **NATO checklist content library** — 10 new checklist items **DCS-56 …
+  DCS-65** in a new domain **5.11 Coalition Interoperability & NATO
+  Alignment**, mapped to STANAG 4774 (SPIF), STANAG 4778 (metadata
+  binding), STANAG 5636 (NCMS core metadata), CMBAC, NIST SP 800-63
+  (digital identity), NIST SP 800-162 (ABAC), FIPS 140-3, and NSA CNSA 2.0.
+  Nine of the existing checklist items were retagged as **JOINT** so they
+  correctly appear in both **US Only** and **NATO Only** framework modes.
+- **XML SPIF validator + STANAG 4778 binding verification** — Evidence
+  Locker → **⌂ Validate SPIF** parses a STANAG 4774 policy, extracts the
+  allowed classifications / releasability tokens / categories, and
+  cross-checks every registered protected data object against the policy
+  (PASS / WARN on partial releasability / FAIL on classification not in
+  the policy). A separate STANAG 4778 signature verifier uses per-request
+  public-key material (never persisted) to prove that a label ↔ data
+  binding was produced by the policy's signing key. Both flow into the
+  audit chain.
+
+The new checklist and validator support **US Only / NATO Only / Combined /
+Custom** framework selection from v2.0 unchanged, so a NATO-only
+assessment naturally shows only the NATO + JOINT items and the coalition
+report artifacts.
+
+Everything from v2.0 continues to work.
 
 ## What's new in v2.0
 
@@ -166,6 +194,12 @@ items are excluded from the readiness score, evidence completeness, and the
 critical gate, and the report auto-generates a Scope Statement explaining why.
 
 ![Assessment Scope](docs/screenshots/13-assessment-scope.png)
+
+SPIF Validator — paste a STANAG 4774 policy, get the Policy Summary,
+structural rules with PASS/CRITICAL/WARN verdicts, and per-asset PASS /
+WARN / FAIL cross-check against the registered protected data objects.
+
+![SPIF Validator](docs/screenshots/14-spif-validator.png)
 
 ---
 
@@ -441,6 +475,7 @@ inline.
 | 5.8 | Protection Controls | 8 % |
 | 5.9 | Telemetry, Audit & Evidence | **15 %** |
 | 5.10 | Operational Readiness & Scale | 10 % |
+| 5.11 | Coalition Interoperability & NATO Alignment *(new in v2.1)* | 0 % (opt-in) |
 
 Weights are editable per event (Event Workspace → Compliance Weights).
 
@@ -766,15 +801,18 @@ v2 (*Events ▾ → Import JSON*); attribution is added on import.
   rationale, bulk selection by domain, and framework-driven scope. Scoring
   engine and critical gate honor scope; the report auto-generates a Scope
   Statement. *(delivered)*
-- ⬜ **NATO checklist content** — new domain 5.11 (Coalition Interoperability
-  & NATO Alignment), items `DCS-56` through `DCS-65`, and structured US ↔
-  NATO ↔ Joint standards mappings (STANAG 4774, 4778, 5636, CMBAC,
-  NIST 800-63, 800-162, FIPS 140-3, CNSA 2.0).
-- ⬜ **XML SPIF validator and STANAG 4778 binding verification** — server-side
-  STANAG 4774 SPIF parser, cross-check of registered assets against the
-  loaded policy, WebCrypto-based signature verification of label ↔ data
-  bindings; produces evidence records and a *NATO-Releasable Compliance
-  Summary* report section.
+- ✅ **NATO checklist content** — new domain 5.11 (Coalition Interoperability
+  & NATO Alignment), items `DCS-56` through `DCS-65`, standards constants
+  for STANAG 4774 / 4778 / 5636, CMBAC, NIST 800-63, 800-162, FIPS 140-3,
+  and CNSA 2.0. Nine existing items retagged JOINT so they cover both US
+  and NATO framework modes. *(delivered in v2.1)*
+- ✅ **XML SPIF validator + STANAG 4778 binding verification** —
+  zero-dependency STANAG 4774 SPIF parser (rejects DOCTYPE for XXE
+  hardening), structural profile validation, policy extraction, cross-check
+  of registered protected data objects against the policy, and Node
+  `crypto`-based RSA / RSA-PSS / ECDSA signature verification for label ↔
+  data bindings. Every validation run is written to the audit chain. Public
+  keys are per-request and never persisted. *(delivered in v2.1)*
 - ⬜ **Mission Thread cyber resiliency** — criticality classification and
   loss-of-C/I/A impact per mission thread; new domain 5.12 tied to
   NIST 800-160 Vol 2 and DoDI 5000.89.

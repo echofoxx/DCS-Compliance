@@ -20,7 +20,7 @@ services:
 
   dcs-command-center:
     build: .
-    image: dcs-assessment-command-center:2.0.0
+    image: dcs-assessment-command-center:2.1.0
     container_name: dcs-compliance-app
     depends_on:
       postgres:

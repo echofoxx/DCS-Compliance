@@ -279,6 +279,8 @@ const Store = (() => {
       if (ev.execNarrative === undefined) ev.execNarrative = "";
       if (!ev.dailyLogs) ev.dailyLogs = [];
       if (!ev.domainWeights) ev.domainWeights = Object.fromEntries(DCS_TEMPLATE.DOMAINS.map((d) => [d.id, d.weight]));
+      // Backfill new domains (added in later releases) at their default weight.
+      DCS_TEMPLATE.DOMAINS.forEach((d) => { if (ev.domainWeights[d.id] === undefined) ev.domainWeights[d.id] = d.weight; });
       // Framework Mode + Partial Scope migration (introduced 2027):
       // pre-existing events default to combined (no behavior change) and
       // every checklist item is in_scope.

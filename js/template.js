@@ -117,7 +117,9 @@ const DCS_TEMPLATE = (() => {
     { id: "D09", code: "5.9",  name: "Telemetry, Audit & Evidence",             short: "Audit",       weight: 15,
       focus: "Who accessed what, when, why, and under what policy can be reconstructed from exportable audit evidence." },
     { id: "D10", code: "5.10", name: "Operational Readiness & Scale",           short: "Readiness",   weight: 10,
-      focus: "Controls work in the real event workflow without forcing bypass behavior, and have a path to scale beyond the event." }
+      focus: "Controls work in the real event workflow without forcing bypass behavior, and have a path to scale beyond the event." },
+    { id: "D11", code: "5.11", name: "Coalition Interoperability & NATO Alignment", short: "Coalition", weight: 0,
+      focus: "STANAG-conformant confidentiality labels and bindings, CMBAC decisions, and coalition partner recognition — the interoperability half of Data-Centric Security. Default weight is 0 so this domain does not count toward US-only assessments; set a non-zero weight when the assessment includes NATO alignment." }
   ];
 
   /* -------------------------------------------------- standards shorthand */
@@ -129,18 +131,27 @@ const DCS_TEMPLATE = (() => {
   const CISA      = "CISA ZT Maturity Model v2 (Data Pillar)";
   const NSA_DATA  = "NSA CSI: Advancing ZT Maturity — Data Pillar";
   const n53 = f => `NIST SP 800-53r5 ${f}`;
+  // NATO/coalition standards for Domain 5.11
+  const STANAG_4774 = "STANAG 4774 (Confidentiality Metadata Label — XML SPIF)";
+  const STANAG_4778 = "STANAG 4778 (Metadata Binding)";
+  const STANAG_5636 = "STANAG 5636 (NCMS Core Metadata Specification)";
+  const CMBAC       = "CMBAC (Confidentiality Metadata-Based Access Control)";
+  const N800_63     = "NIST SP 800-63 (Digital Identity Guidelines)";
+  const N800_162    = "NIST SP 800-162 (Attribute-Based Access Control)";
+  const FIPS_140_3  = "FIPS 140-3 (Cryptographic Module Validation)";
+  const CNSA_2      = "NSA CNSA 2.0 (Commercial National Security Algorithm Suite)";
 
   /* ------------------------------------------------------- checklist items */
   // severity: severity assigned to an auto-generated finding when the item fails.
   const CHECKLIST = [
 
     /* 5.1 Scope, Authority & Use Cases */
-    { id: "DCS-01", domainId: "D01", severity: "major",
+    { id: "DCS-01", domainId: "D01", severity: "major", frameworks: ["JOINT"],
       requirement: "DCS event scope identifies mission threads, user communities, systems, data flows, and control boundaries.",
       question: "Is the assessment scope documented and approved before execution begins?",
       evidence: ["Approved DCS scope statement", "Event architecture", "Mission thread matrix"],
       standards: [N207, n53("PL-2"), n53("RA-3")] },
-    { id: "DCS-02", domainId: "D01", severity: "major",
+    { id: "DCS-02", domainId: "D01", severity: "major", frameworks: ["JOINT"],
       requirement: "Each DCS use case identifies the mission need, protected asset, authorized users, unauthorized users, and expected protection outcome.",
       question: "Does every use case define who should and should not receive the data, and what protection outcome is expected?",
       evidence: ["DCS use case card", "Expected outcome matrix"],
@@ -150,7 +161,7 @@ const DCS_TEMPLATE = (() => {
       question: "Do assessors know who owns each decision and how issues get escalated?",
       evidence: ["RACI", "Assessor roster", "Issue escalation process"],
       standards: [n53("PM-2"), n53("PS-7")] },
-    { id: "DCS-04", domainId: "D01", severity: "major",
+    { id: "DCS-04", domainId: "D01", severity: "major", frameworks: ["JOINT"],
       requirement: "DCS compliance expectations are defined before the event, including pass, partial, fail, not observed, and not applicable criteria.",
       question: "Is the scoring rubric agreed before testing starts?",
       evidence: ["Assessment plan", "Scoring rubric"],
@@ -162,7 +173,7 @@ const DCS_TEMPLATE = (() => {
       standards: [n53("PL-2"), n53("RA-3")] },
 
     /* 5.2 Architecture & Control Points */
-    { id: "DCS-06", domainId: "D02", severity: "major",
+    { id: "DCS-06", domainId: "D02", severity: "major", frameworks: ["JOINT"],
       requirement: "DCS architecture identifies policy decision points, policy enforcement points, identity sources, attribute sources, label sources, and telemetry paths.",
       question: "Can the team point to the PDP, PEPs, and every input feeding them?",
       evidence: ["DCS architecture diagram", "Integration map"],
@@ -275,7 +286,7 @@ const DCS_TEMPLATE = (() => {
       standards: [n53("CA-5"), n53("AC-1")] },
 
     /* 5.6 Access Decision & Enforcement */
-    { id: "DCS-27", domainId: "D06", severity: "major",
+    { id: "DCS-27", domainId: "D06", severity: "major", frameworks: ["JOINT"],
       requirement: "Expected DCS access outcomes are documented before testing for authorized users, unauthorized users, mission partners, and role/device changes.",
       question: "Does an expected allow/deny matrix exist before test execution?",
       evidence: ["Expected allow/deny matrix", "Test cards"],
@@ -371,12 +382,12 @@ const DCS_TEMPLATE = (() => {
       standards: [n53("SI-12"), n53("MP-6")] },
 
     /* 5.9 Telemetry, Audit & Evidence */
-    { id: "DCS-45", domainId: "D09", severity: "critical",
+    { id: "DCS-45", domainId: "D09", severity: "critical", frameworks: ["JOINT"],
       requirement: "DCS audit logs capture user, device, asset, action, label, policy, decision, enforcement point, timestamp, and result.",
       question: "Do log records carry the full decision context?",
       evidence: ["Audit log sample"],
       standards: [n53("AU-3"), n53("AU-12"), ZT_VA] },
-    { id: "DCS-46", domainId: "D09", severity: "critical",
+    { id: "DCS-46", domainId: "D09", severity: "critical", frameworks: ["JOINT"],
       requirement: "DCS logs capture both successful and denied access attempts.",
       question: "Are denials logged as faithfully as allows?",
       evidence: ["Allow/deny log export"],
@@ -391,12 +402,12 @@ const DCS_TEMPLATE = (() => {
       question: "Do violations surface as alerts a human will actually see?",
       evidence: ["SIEM/dashboard alert", "Notification evidence"],
       standards: [n53("SI-4"), n53("AU-6"), ZT_VA] },
-    { id: "DCS-49", domainId: "D09", severity: "critical",
+    { id: "DCS-49", domainId: "D09", severity: "critical", frameworks: ["JOINT"],
       requirement: "DCS evidence is exportable and sufficient for independent post-event reconstruction.",
       question: "Could an independent analyst rebuild the event timeline from the exports?",
       evidence: ["CSV/JSON export", "Evidence package"],
       standards: [n53("AU-7"), n53("AU-9")] },
-    { id: "DCS-50", domainId: "D09", severity: "major",
+    { id: "DCS-50", domainId: "D09", severity: "major", frameworks: ["JOINT"],
       requirement: "DCS event evidence supports expected versus actual analysis for every test card.",
       question: "Does every test card have linked evidence for its outcome?",
       evidence: ["Completed test card", "Evidence traceability"],
@@ -427,7 +438,59 @@ const DCS_TEMPLATE = (() => {
       requirement: "DCS capability has a clear path to scale beyond the event, including governance, integration, operational support, and sustainment needs.",
       question: "Is there a credible roadmap from demonstration to operations?",
       evidence: ["Gap list", "Roadmap", "Sustainment estimate"],
-      standards: [n53("PM-3"), n53("SA-2")] }
+      standards: [n53("PM-3"), n53("SA-2")] },
+
+    /* 5.11 Coalition Interoperability & NATO Alignment (new in v2.1) */
+    { id: "DCS-56", domainId: "D11", severity: "critical", frameworks: ["NATO"],
+      requirement: "Confidentiality labels for coalition-shared data are expressed as machine-readable STANAG 4774 SPIF-conformant XML.",
+      question: "Does the DCS label schema for coalition sharing produce STANAG 4774 XML that a policy engine can parse?",
+      evidence: ["Sample STANAG 4774 XML label", "SPIF policy document", "Parser input/output"],
+      standards: [STANAG_4774, NSA_DATA, n53("AC-16")] },
+    { id: "DCS-57", domainId: "D11", severity: "critical", frameworks: ["NATO"],
+      requirement: "STANAG 4778 cryptographic binding of confidentiality metadata to the data object is verifiable using the policy's public key material.",
+      question: "Can an independent verifier confirm the STANAG 4778 signature over a label ↔ data pair using the policy public key?",
+      evidence: ["Signed label/data sample", "Public key (PEM)", "Verification result"],
+      standards: [STANAG_4778, FIPS_140_3, n53("SC-8"), n53("SC-16")] },
+    { id: "DCS-58", domainId: "D11", severity: "major", frameworks: ["NATO"],
+      requirement: "Protected data objects carry the NCMS core metadata attributes required by STANAG 5636 for discovery, ownership, and lineage across the coalition.",
+      question: "Does the asset catalog produce STANAG 5636-conformant metadata records for shared data?",
+      evidence: ["Asset metadata export", "NCMS field mapping"],
+      standards: [STANAG_5636, n53("PM-5"), NSA_DATA] },
+    { id: "DCS-59", domainId: "D11", severity: "critical", frameworks: ["NATO"],
+      requirement: "Access decisions for coalition-shared data are driven by CMBAC — the confidentiality metadata bound to the data — not by network location, tool identity, or manual review.",
+      question: "Can the assessor trace a coalition access decision to the bound metadata that drove it?",
+      evidence: ["PDP decision log referencing bound metadata", "CMBAC rule set"],
+      standards: [CMBAC, N800_162, n53("AC-3"), n53("AC-16")] },
+    { id: "DCS-60", domainId: "D11", severity: "major", frameworks: ["JOINT"],
+      requirement: "Digital identity assurance for coalition users matches the classification and sensitivity of the data they may access (NIST SP 800-63 identity/authenticator/federation assurance levels).",
+      question: "Is the identity assurance level (IAL/AAL/FAL) for each coalition subject documented and appropriate for the data they access?",
+      evidence: ["Identity assurance matrix", "IdP configuration record"],
+      standards: [N800_63, ZT_UE, n53("IA-2"), n53("IA-8")] },
+    { id: "DCS-61", domainId: "D11", severity: "major", frameworks: ["JOINT"],
+      requirement: "ABAC policy expression declares the required subject, resource, and environment attributes (NIST SP 800-162), and those attributes are actually available at decision time.",
+      question: "Do the attributes the policy asks for actually reach the PDP at decision time?",
+      evidence: ["Policy rule set", "Attribute availability record", "PDP decision log"],
+      standards: [N800_162, CMBAC, n53("AC-3")] },
+    { id: "DCS-62", domainId: "D11", severity: "critical", frameworks: ["JOINT"],
+      requirement: "Cryptographic modules protecting label bindings and data at rest / in transit are FIPS 140-3 validated (or accepted-equivalent for the coalition partner).",
+      question: "Are the crypto modules in the enforcement path FIPS 140-3 validated, and can the evidence be produced?",
+      evidence: ["Module validation certificates", "Configuration record"],
+      standards: [FIPS_140_3, n53("SC-13"), n53("SC-8"), n53("SC-28")] },
+    { id: "DCS-63", domainId: "D11", severity: "moderate", frameworks: ["JOINT"],
+      requirement: "Where quantum-resistant assurance is required, the algorithms and key sizes conform to NSA CNSA 2.0.",
+      question: "Are CNSA 2.0-compliant algorithms in use for the workloads that require them?",
+      evidence: ["Cipher suite record", "Migration plan for legacy algorithms"],
+      standards: [CNSA_2, FIPS_140_3, n53("SC-13")] },
+    { id: "DCS-64", domainId: "D11", severity: "major", frameworks: ["NATO"],
+      requirement: "Coalition partner nations, mission-partner communities, and release caveats are enumerated in the loaded SPIF and referenced consistently by policy rules.",
+      question: "Do the SPIF's releasability tokens cover every partner community used by the assessment's access rules?",
+      evidence: ["SPIF releasability list", "Sharing policy matrix"],
+      standards: [STANAG_4774, CMBAC, n53("AC-21")] },
+    { id: "DCS-65", domainId: "D11", severity: "critical", frameworks: ["NATO"],
+      requirement: "Cross-domain data movement is tested for STANAG label persistence, STANAG 4778 binding survival, and correct CMBAC decision behavior at the receiving domain.",
+      question: "Do labels, bindings, and access decisions survive an end-to-end cross-domain transit under test?",
+      evidence: ["Before/after labels", "Binding verification pre/post transit", "PDP decision log at receiver"],
+      standards: [STANAG_4774, STANAG_4778, CMBAC, n53("AC-4"), NSA_DATA] }
   ];
 
   /* ------------------------------------------------- test card library */
